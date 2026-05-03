@@ -181,7 +181,6 @@ def convert_body(content: str) -> str:
                 _close_list(result, state)
                 _close_quote(result, state)
                 state["in_code_block"] = True
-                lang = line[3:].strip()
                 result.append(r"\begin{verbatim}")
             else:
                 state["in_code_block"] = False

@@ -6,8 +6,6 @@ import textwrap
 
 import pytest
 
-# Add the repository root to the path so we can import md2tex.
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 import md2tex
 
 
