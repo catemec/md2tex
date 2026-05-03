@@ -86,12 +86,46 @@ def _html_table_to_latex(html: str) -> str:
 
         formatted = []
         for cell, is_hdr in zip(cells, flags):
+            cell = _escape_ampersands(cell)
             formatted.append(r"\textbf{" + cell + "}" if is_hdr else cell)
         lines.append(" & ".join(formatted) + r" \\")
         lines.append(r"\hline")
 
     lines += [r"\end{tabular}", r"\end{table}"]
     return "\n".join(lines)
+
+
+# ---------------------------------------------------------------------------
+# LaTeX escaping helpers
+# ---------------------------------------------------------------------------
+
+# Math delimiters that must be left untouched (an unescaped & inside, e.g.,
+# an align/matrix environment, is meaningful to LaTeX).  Ordered longest-first
+# so $$...$$ is matched before $...$.
+_MATH_PATTERNS = [
+    (re.compile(r"\$\$.*?\$\$", re.DOTALL)),
+    (re.compile(r"\\\[.*?\\\]", re.DOTALL)),
+    (re.compile(r"\\\(.*?\\\)", re.DOTALL)),
+    (re.compile(r"\$[^$\n]+?\$")),
+]
+
+
+def _escape_ampersands(text: str) -> str:
+    """Escape ``&`` as ``\\&`` outside math regions; leave ``\\&`` alone."""
+    stash: list[str] = []
+
+    def _stash(m: re.Match) -> str:
+        stash.append(m.group(0))
+        return f"\x00MATH{len(stash) - 1}\x00"
+
+    for pattern in _MATH_PATTERNS:
+        text = pattern.sub(_stash, text)
+
+    text = re.sub(r"(?<!\\)&", r"\\&", text)
+
+    for idx, math in enumerate(stash):
+        text = text.replace(f"\x00MATH{idx}\x00", math)
+    return text
 
 
 # ---------------------------------------------------------------------------
@@ -134,6 +168,8 @@ def _convert_inline(text: str) -> str:
     text = re.sub(r"(?<![a-zA-Z0-9])_(.+?)_(?![a-zA-Z0-9])", r"\\textit{\1}", text)
     # Inline code: `code`
     text = re.sub(r"`([^`]+)`", r"\\texttt{\1}", text)
+    # Escape stray ampersands (preserves math regions and existing \&)
+    text = _escape_ampersands(text)
     return text
 
 
@@ -166,6 +202,7 @@ def convert_body(content: str) -> str:
         "in_itemize": False,
         "in_enumerate": False,
         "in_quote": False,
+        "in_display_math": None,   # None or the closing delimiter ('$$' / '\\]')
     }
     html_buf: list[str] = []
     i = 0
@@ -189,6 +226,35 @@ def convert_body(content: str) -> str:
             continue
 
         if state["in_code_block"]:
+            result.append(line)
+            i += 1
+            continue
+
+        # ------------------------------------------------------------------ #
+        # Display math block — pass through verbatim                           #
+        # Opens on a line whose stripped form starts with $$ or \[, closes on  #
+        # the matching delimiter.  Single-line $$...$$ on one line is handled  #
+        # by the inline math regex in _convert_inline.                         #
+        # ------------------------------------------------------------------ #
+        if state["in_display_math"] is not None:
+            result.append(line)
+            if state["in_display_math"] in line.strip():
+                state["in_display_math"] = None
+            i += 1
+            continue
+
+        stripped = line.strip()
+        if stripped.startswith("$$") and stripped.count("$$") == 1:
+            _close_list(result, state)
+            _close_quote(result, state)
+            state["in_display_math"] = "$$"
+            result.append(line)
+            i += 1
+            continue
+        if stripped.startswith(r"\[") and r"\]" not in stripped:
+            _close_list(result, state)
+            _close_quote(result, state)
+            state["in_display_math"] = r"\]"
             result.append(line)
             i += 1
             continue

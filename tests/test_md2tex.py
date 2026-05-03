@@ -220,6 +220,58 @@ class TestInlineFormatting:
 
 
 # ---------------------------------------------------------------------------
+# Ampersand escaping
+# ---------------------------------------------------------------------------
+
+class TestAmpersandEscaping:
+    def test_plain_ampersand_in_paragraph(self):
+        assert r"AT\&T" in body("AT&T\n")
+
+    def test_already_escaped_ampersand_unchanged(self):
+        # Existing \& should not become \\&.
+        result = body(r"AT\&T" + "\n")
+        assert r"AT\&T" in result
+        assert r"\\&" not in result
+
+    def test_multiple_ampersands(self):
+        result = body("Tom & Jerry & Spike\n")
+        assert r"Tom \& Jerry \& Spike" in result
+
+    def test_ampersand_in_inline_math_preserved(self):
+        # Inline math may contain & (e.g., a small matrix); leave it alone.
+        result = body(r"Inline $\begin{matrix}a & b\end{matrix}$ here." + "\n")
+        assert r"$\begin{matrix}a & b\end{matrix}$" in result
+
+    def test_ampersand_in_display_math_preserved(self):
+        md = "$$\nx & y\n$$\n"
+        result = body(md)
+        assert "x & y" in result
+        assert r"x \& y" not in result
+
+    def test_ampersand_outside_math_escaped_when_math_present(self):
+        result = body("Cats & dogs and $a + b$ and Tom & Jerry\n")
+        assert r"Cats \& dogs" in result
+        assert r"Tom \& Jerry" in result
+        assert "$a + b$" in result
+
+    def test_ampersand_in_url_escaped(self):
+        result = body("[link](https://x.test/?a=1&b=2)\n")
+        assert r"\href{https://x.test/?a=1\&b=2}{link}" in result
+
+    def test_html_table_cell_ampersand_escaped(self):
+        md = "<table>\n<tr><td>Tom & Jerry</td><td>OK</td></tr>\n</table>\n"
+        result = body(md)
+        # Cell content has \&, but the column separator " & " remains.
+        assert r"Tom \& Jerry" in result
+        assert " & OK" in result
+
+    def test_html_entity_ampersand_in_table_cell(self):
+        md = "<table>\n<tr><td>A&amp;B</td></tr>\n</table>\n"
+        result = body(md)
+        assert r"A\&B" in result
+
+
+# ---------------------------------------------------------------------------
 # Lists
 # ---------------------------------------------------------------------------
 
