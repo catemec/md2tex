@@ -74,6 +74,7 @@ def _html_table_to_latex(html: str) -> str:
     lines = [
         r"\begin{table}[htbp]",
         r"\centering",
+        r"\adjustbox{max width=\columnwidth}{%",
         r"\begin{tabular}{" + col_spec + "}",
         r"\hline",
     ]
@@ -91,7 +92,7 @@ def _html_table_to_latex(html: str) -> str:
         lines.append(" & ".join(formatted) + r" \\")
         lines.append(r"\hline")
 
-    lines += [r"\end{tabular}", r"\end{table}"]
+    lines += [r"\end{tabular}%", r"}", r"\end{table}"]
     return "\n".join(lines)
 
 
@@ -453,6 +454,7 @@ _PREAMBLE = r"""\documentclass{article}
 \usepackage{graphicx}
 \usepackage{hyperref}
 \usepackage{booktabs}
+\usepackage{adjustbox}
 """
 
 

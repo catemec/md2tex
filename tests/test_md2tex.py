@@ -108,6 +108,21 @@ class TestHTMLTables:
         result = body(md)
         assert " & " in result
 
+    def test_capped_at_columnwidth(self):
+        md = "<table>\n<tr><td>X</td><td>Y</td></tr>\n</table>\n"
+        result = body(md)
+        # Tabular is wrapped in \adjustbox so over-wide tables shrink, but
+        # narrow tables are not stretched.
+        assert r"\adjustbox{max width=\columnwidth}{" in result
+        ab = result.index(r"\adjustbox{max width=\columnwidth}{")
+        tab_begin = result.index(r"\begin{tabular}")
+        tab_end = result.index(r"\end{tabular}")
+        assert ab < tab_begin < tab_end
+
+    def test_adjustbox_package_in_preamble(self):
+        result = md2tex.convert("Hello\n", standalone=True)
+        assert r"\usepackage{adjustbox}" in result
+
     def test_multi_column(self):
         md = textwrap.dedent("""\
             <table>
