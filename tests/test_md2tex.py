@@ -278,11 +278,12 @@ class TestVerbatimSanitization:
         assert "range 1-2 vs 1-2" in result
         assert "–" not in result
 
-    def test_endash_outside_verbatim_unchanged(self):
-        # Plain prose should keep en-dash; preamble fontenc handles rendering.
+    def test_endash_in_prose_normalized(self):
+        # Prose normalization collapses Unicode dashes to LaTeX-canonical form.
         md = "Years 1716–1807 spanned a century.\n"
         result = body(md)
-        assert "1716–1807" in result
+        assert "1716--1807" in result
+        assert "–" not in result
 
     def test_superscript_in_blockquote_replaced(self):
         md = "> Akan Ethics, 1988²\n"
@@ -378,6 +379,58 @@ class TestQuoteNormalization:
         # ASCII ' is intentionally untouched (works as apostrophe).
         result = body("don't\n")
         assert "don't" in result
+
+
+# ---------------------------------------------------------------------------
+# Hyphen / dash normalization
+# ---------------------------------------------------------------------------
+
+class TestHyphenNormalization:
+    def test_endash_to_double_hyphen(self):
+        result = body("pages 12–34\n")
+        assert "pages 12--34" in result
+        assert "–" not in result
+
+    def test_emdash_to_triple_hyphen(self):
+        result = body("Wait — really?\n")
+        assert "Wait --- really?" in result
+        assert "—" not in result
+
+    def test_hyphen_char_to_ascii(self):
+        result = body("co‐operate\n")
+        assert "co-operate" in result
+        assert "‐" not in result
+
+    def test_nonbreaking_hyphen_to_ascii(self):
+        result = body("X‑Y\n")
+        assert "X-Y" in result
+        assert "‑" not in result
+
+    def test_figure_dash_to_double_hyphen(self):
+        result = body("555‒1212\n")
+        assert "555--1212" in result
+
+    def test_horizontal_bar_to_triple_hyphen(self):
+        result = body("quote― attribution\n")
+        assert "quote--- attribution" in result
+
+    def test_minus_sign_to_ascii(self):
+        result = body("temp −5 degrees\n")
+        assert "temp -5 degrees" in result
+
+    def test_soft_hyphen_dropped(self):
+        result = body("super­califragilistic\n")
+        assert "supercalifragilistic" in result
+        assert "­" not in result
+
+    def test_ascii_hyphen_unchanged(self):
+        result = body("well-known fact\n")
+        assert "well-known fact" in result
+
+    def test_dashes_in_math_preserved(self):
+        # Inside $...$ Unicode dashes/minus shouldn't be touched.
+        result = body("Equation $a − b = c – d$ end.\n")
+        assert "$a − b = c – d$" in result
 
 
 # ---------------------------------------------------------------------------

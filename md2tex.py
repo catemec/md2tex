@@ -139,11 +139,18 @@ def _escape_ampersands(text: str) -> str:
 # Unicode characters that the standard `verbatim` environment can't render
 # reliably (the typewriter font lacks glyphs for them under several common
 # LaTeX setups).  Mapped to ASCII equivalents that read sensibly in monospace.
+# Note: dash mappings here differ from the prose `_HYPHEN_MAP` below — inside
+# verbatim, LaTeX's `--` / `---` ligatures don't fire, so en-dash collapses
+# to `-` and em-dash to `--` (visual approximation) rather than `--` / `---`.
 _VERBATIM_UNICODE_MAP = {
     "–": "-",     # – en-dash
     "—": "--",    # — em-dash
     "‐": "-",     # ‐ hyphen
     "‑": "-",     # ‑ non-breaking hyphen
+    "‒": "--",    # ‒ figure dash
+    "―": "--",    # ― horizontal bar
+    "−": "-",     # − minus sign
+    "­": "", # ­ soft hyphen (advisory; drop)
     "‘": "'",     # ‘ left single quote
     "’": "'",     # ’ right single quote
     "“": '"',     # “ left double quote
@@ -185,6 +192,32 @@ def _sanitize_verbatim(line: str) -> str:
         if src in line:
             line = line.replace(src, dst)
     return line
+
+
+# Canonical LaTeX forms for Unicode hyphen/dash variants in regular prose.
+# LaTeX composes ASCII hyphen-minus runs into the proper glyphs (`-` → hyphen,
+# `--` → en-dash, `---` → em-dash), so we collapse Unicode variants to match.
+_HYPHEN_MAP = {
+    "‐": "-",    # ‐ HYPHEN
+    "‑": "-",    # ‑ NON-BREAKING HYPHEN
+    "‒": "--",   # ‒ FIGURE DASH
+    "–": "--",   # – EN DASH
+    "—": "---",  # — EM DASH
+    "―": "---",  # ― HORIZONTAL BAR
+    "−": "-",    # − MINUS SIGN
+    "­": "",     # ­ SOFT HYPHEN (advisory; drop)
+}
+
+
+def _normalize_hyphens(text: str) -> str:
+    """Collapse Unicode hyphen/dash variants to LaTeX-canonical -, --, ---."""
+    def _do(t: str) -> str:
+        for src, dst in _HYPHEN_MAP.items():
+            if src in t:
+                t = t.replace(src, dst)
+        return t
+
+    return _with_math_protected(text, _do)
 
 
 def _normalize_quotes(text: str) -> str:
@@ -361,6 +394,8 @@ def _convert_inline(text: str) -> str:
     text = re.sub(r"`([^`]+)`", r"\\texttt{\1}", text)
     # Normalize ASCII/Unicode quote characters to LaTeX form.
     text = _normalize_quotes(text)
+    # Unicode hyphen/dash variants → -, --, ---
+    text = _normalize_hyphens(text)
     # Unicode superscripts (¹²³…) → $^{...}$
     text = _convert_superscripts(text)
     # Escape stray ampersands (preserves math regions and existing \&)
