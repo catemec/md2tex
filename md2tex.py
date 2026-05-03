@@ -136,6 +136,17 @@ def _escape_ampersands(text: str) -> str:
     return _with_math_protected(text, lambda t: re.sub(r"(?<!\\)&", r"\\&", t))
 
 
+def _escape_currency_dollars(text: str) -> str:
+    """Escape ``$`` followed by a digit (currency) as ``\\$``.
+
+    Must run before any math-protection pass: the inline-math regex
+    pairs ``$...$`` greedily, so ``$12 to $18`` would otherwise be
+    stashed as a bogus math region and emitted to LaTeX as math mode.
+    Skips ``\\$`` (already escaped) and ``$$`` (display-math open).
+    """
+    return re.sub(r"(?<!\\)(?<!\$)\$(?!\$)(?=\d)", r"\\$", text)
+
+
 # Unicode characters that the standard `verbatim` environment can't render
 # reliably (the typewriter font lacks glyphs for them under several common
 # LaTeX setups).  Mapped to ASCII equivalents that read sensibly in monospace.
@@ -376,6 +387,9 @@ def _figure_repl(m: re.Match) -> str:
 
 def _convert_inline(text: str) -> str:
     """Apply inline Markdown → LaTeX substitutions to *text*."""
+    # Escape currency $ first — before anything that protects math regions,
+    # because the math-pairing regex would otherwise mis-pair currency $.
+    text = _escape_currency_dollars(text)
     # Figures: ![alt](path "caption") or ![alt](path)
     text = re.sub(
         r'!\[([^\]]*)\]\(([^)"]+?)(?:\s+"([^"]*)")?\)',

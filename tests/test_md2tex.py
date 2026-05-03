@@ -165,6 +165,31 @@ class TestEquations:
         result = body(md)
         assert "$\\alpha$" in result
 
+    def test_currency_single_dollar_escaped(self):
+        md = "A final payment of $90.\n"
+        result = body(md)
+        assert r"\$90" in result
+        assert "$90" not in result.replace(r"\$90", "")
+
+    def test_currency_multiple_dollars_in_paragraph_escaped(self):
+        md = "He earned $12 to $18 a month and saved $300.\n"
+        result = body(md)
+        assert r"\$12" in result
+        assert r"\$18" in result
+        assert r"\$300" in result
+
+    def test_currency_does_not_break_real_inline_math(self):
+        md = "The price is $50 but the formula is $x^2 + y^2 = z^2$.\n"
+        result = body(md)
+        assert r"\$50" in result
+        assert "$x^2 + y^2 = z^2$" in result
+
+    def test_already_escaped_dollar_left_alone(self):
+        md = "He paid \\$90 for it.\n"
+        result = body(md)
+        assert result.count(r"\$90") == 1
+        assert r"\\$90" not in result
+
 
 # ---------------------------------------------------------------------------
 # Figures
