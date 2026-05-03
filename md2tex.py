@@ -133,6 +133,32 @@ def _escape_ampersands(text: str) -> str:
     return _with_math_protected(text, lambda t: re.sub(r"(?<!\\)&", r"\\&", t))
 
 
+# Unicode characters that the standard `verbatim` environment can't render
+# reliably (the typewriter font lacks glyphs for them under several common
+# LaTeX setups).  Mapped to ASCII equivalents that read sensibly in monospace.
+_VERBATIM_UNICODE_MAP = {
+    "–": "-",     # – en-dash
+    "—": "--",    # — em-dash
+    "‐": "-",     # ‐ hyphen
+    "‑": "-",     # ‑ non-breaking hyphen
+    "‘": "'",     # ‘ left single quote
+    "’": "'",     # ’ right single quote
+    "“": '"',     # “ left double quote
+    "”": '"',     # ” right double quote
+    "•": "*",     # • bullet
+    "…": "...",   # … horizontal ellipsis
+    " ": " ",     # NBSP
+}
+
+
+def _sanitize_verbatim(line: str) -> str:
+    """Replace Unicode characters that misrender inside ``verbatim``."""
+    for src, dst in _VERBATIM_UNICODE_MAP.items():
+        if src in line:
+            line = line.replace(src, dst)
+    return line
+
+
 def _normalize_quotes(text: str) -> str:
     """Convert ASCII/Unicode quotes to LaTeX-style ``\\`\\``...''`` and `` ` ``/``'``.
 
@@ -252,7 +278,7 @@ def convert_body(content: str) -> str:
             continue
 
         if state["in_code_block"]:
-            result.append(line)
+            result.append(_sanitize_verbatim(line))
             i += 1
             continue
 
@@ -314,7 +340,7 @@ def convert_body(content: str) -> str:
             if not state["in_quote"]:
                 result.append(r"\begin{verbatim}")
                 state["in_quote"] = True
-            result.append(tab_quote.group(2))
+            result.append(_sanitize_verbatim(tab_quote.group(2)))
             i += 1
             continue
 
@@ -325,7 +351,7 @@ def convert_body(content: str) -> str:
             if not state["in_quote"]:
                 result.append(r"\begin{verbatim}")
                 state["in_quote"] = True
-            result.append(std_quote.group(1))
+            result.append(_sanitize_verbatim(std_quote.group(1)))
             i += 1
             continue
 
@@ -421,6 +447,8 @@ def convert_body(content: str) -> str:
 # ---------------------------------------------------------------------------
 
 _PREAMBLE = r"""\documentclass{article}
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
 \usepackage{amsmath}
 \usepackage{graphicx}
 \usepackage{hyperref}

@@ -227,6 +227,61 @@ class TestInlineFormatting:
 
 
 # ---------------------------------------------------------------------------
+# Verbatim Unicode sanitization
+# ---------------------------------------------------------------------------
+
+class TestVerbatimSanitization:
+    def test_endash_in_blockquote_replaced(self):
+        md = "> South Carolina, 1716–1807\n"
+        result = body(md)
+        assert "1716-1807" in result
+        assert "1716–1807" not in result
+
+    def test_emdash_in_blockquote_replaced(self):
+        md = "> Like this — really\n"
+        result = body(md)
+        assert "Like this -- really" in result
+        assert "—" not in result
+
+    def test_smart_quotes_in_blockquote_replaced(self):
+        md = "> Pollitzer’s “Studies”\n"
+        result = body(md)
+        assert "Pollitzer's \"Studies\"" in result
+        assert "’" not in result and "“" not in result
+
+    def test_bullet_in_blockquote_replaced(self):
+        md = "> intro • point one\n"
+        result = body(md)
+        assert "intro * point one" in result
+
+    def test_endash_in_code_block_replaced(self):
+        md = "```\nrange 1-2 vs 1–2\n```\n"
+        result = body(md)
+        assert "range 1-2 vs 1-2" in result
+        assert "–" not in result
+
+    def test_endash_outside_verbatim_unchanged(self):
+        # Plain prose should keep en-dash; preamble fontenc handles rendering.
+        md = "Years 1716–1807 spanned a century.\n"
+        result = body(md)
+        assert "1716–1807" in result
+
+
+# ---------------------------------------------------------------------------
+# Preamble
+# ---------------------------------------------------------------------------
+
+class TestPreambleEncoding:
+    def test_inputenc_utf8(self):
+        result = md2tex.convert("Hello\n", standalone=True)
+        assert r"\usepackage[utf8]{inputenc}" in result
+
+    def test_fontenc_t1(self):
+        result = md2tex.convert("Hello\n", standalone=True)
+        assert r"\usepackage[T1]{fontenc}" in result
+
+
+# ---------------------------------------------------------------------------
 # Quote normalization
 # ---------------------------------------------------------------------------
 
