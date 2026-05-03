@@ -190,21 +190,38 @@ def _normalize_quotes(text: str) -> str:
 # surprising.
 _EINK_RASTER_EXTS = {".jpg", ".jpeg", ".png", ".tif", ".tiff", ".bmp", ".webp", ".gif"}
 
-# Local adaptive thresholding window and offset.  A ~25px window handles
-# uneven lighting from photographed paper without binarizing whole regions
-# uniformly; +10% requires pixels to be modestly darker than local mean to
-# turn black, which keeps text crisp without flooding shadows.
-_EINK_LAT = "25x25+10%"
+# Local adaptive thresholding window size.  A ~25px window handles uneven
+# lighting from photographed paper without binarizing whole regions uniformly.
+_EINK_LAT_WINDOW = "25x25"
+
+# Offset magnitude (percent of intensity range).  Pixels this much darker than
+# their local mean are treated as ink; everything else is background.
+_EINK_LAT_OFFSET = 10
 
 
-def _eink_tool() -> list[str] | None:
-    """Return the base command for image processing, or ``None`` if unavailable."""
+def _eink_tool() -> tuple[list[str], str] | None:
+    """Return ``(command, flavor)`` for image processing, or ``None``.
+
+    *flavor* is ``"im"`` (ImageMagick) or ``"gm"`` (GraphicsMagick).
+    The two have opposite sign conventions for ``-lat``'s offset, so the
+    caller needs to know which it got.
+    """
     if shutil.which("magick"):
-        return ["magick"]
-    if shutil.which("convert"):
-        return ["convert"]
+        return ["magick"], "im"
     if shutil.which("gm"):
-        return ["gm", "convert"]
+        return ["gm", "convert"], "gm"
+    if shutil.which("convert"):
+        # `convert` could be either IM (still common) or GM's compatibility
+        # shim.  Probe its banner.
+        try:
+            out = subprocess.run(
+                ["convert", "-version"],
+                check=True, capture_output=True, text=True,
+            ).stdout
+        except (subprocess.CalledProcessError, FileNotFoundError):
+            return ["convert"], "im"
+        flavor = "gm" if "GraphicsMagick" in out else "im"
+        return ["convert"], flavor
     return None
 
 
@@ -236,15 +253,21 @@ def _process_image_for_eink(rel_path: str, base_dir: str) -> str:
     if os.path.isfile(abs_out) and os.path.getmtime(abs_out) >= os.path.getmtime(abs_src):
         return out_rel
 
-    tool = _eink_tool()
-    if tool is None:
+    detected = _eink_tool()
+    if detected is None:
         return rel_path
+
+    tool, flavor = detected
+    # ImageMagick: pixels more than +offset BELOW local mean → black.
+    # GraphicsMagick: same effect requires a NEGATIVE sign on the offset.
+    sign = "+" if flavor == "im" else "-"
+    lat_arg = f"{_EINK_LAT_WINDOW}{sign}{_EINK_LAT_OFFSET}%"
 
     cmd = tool + [
         abs_src,
         "-colorspace", "Gray",
         "-normalize",
-        "-lat", _EINK_LAT,
+        "-lat", lat_arg,
         abs_out,
     ]
     try:

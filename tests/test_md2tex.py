@@ -550,7 +550,7 @@ class TestEinkPreprocessing:
             _write_minimal_png(cmd[-1])
             return subprocess.CompletedProcess(cmd, 0)
 
-        monkeypatch.setattr(md2tex, "_eink_tool", lambda: ["fake-tool"])
+        monkeypatch.setattr(md2tex, "_eink_tool", lambda: (["fake-tool"], "im"))
         monkeypatch.setattr(md2tex.subprocess, "run", fake_run)
 
         md = '![Photo](images/fig.png "Caption")\n'
@@ -562,7 +562,7 @@ class TestEinkPreprocessing:
     def test_eink_skips_unsupported_extension(self, tmp_path, monkeypatch):
         # PDFs/SVGs aren't raster — leave them alone.
         (tmp_path / "diagram.pdf").write_bytes(b"%PDF-1.4\n")
-        monkeypatch.setattr(md2tex, "_eink_tool", lambda: ["fake-tool"])
+        monkeypatch.setattr(md2tex, "_eink_tool", lambda: (["fake-tool"], "im"))
         monkeypatch.setattr(
             md2tex.subprocess, "run",
             lambda *a, **kw: pytest.fail("subprocess.run should not be called"),
@@ -573,7 +573,7 @@ class TestEinkPreprocessing:
         assert "eink" not in result
 
     def test_eink_falls_back_when_source_missing(self, tmp_path, monkeypatch):
-        monkeypatch.setattr(md2tex, "_eink_tool", lambda: ["fake-tool"])
+        monkeypatch.setattr(md2tex, "_eink_tool", lambda: (["fake-tool"], "im"))
         monkeypatch.setattr(
             md2tex.subprocess, "run",
             lambda *a, **kw: pytest.fail("subprocess.run should not be called"),
@@ -604,7 +604,7 @@ class TestEinkPreprocessing:
         os.utime(dst, (src_mtime + 1, src_mtime + 1))
 
         calls = []
-        monkeypatch.setattr(md2tex, "_eink_tool", lambda: ["fake-tool"])
+        monkeypatch.setattr(md2tex, "_eink_tool", lambda: (["fake-tool"], "im"))
         monkeypatch.setattr(
             md2tex.subprocess, "run",
             lambda *a, **kw: calls.append(a) or subprocess.CompletedProcess(a, 0),
@@ -624,7 +624,7 @@ class TestEinkPreprocessing:
             _write_minimal_png(cmd[-1])
             return subprocess.CompletedProcess(cmd, 0)
 
-        monkeypatch.setattr(md2tex, "_eink_tool", lambda: ["fake-tool"])
+        monkeypatch.setattr(md2tex, "_eink_tool", lambda: (["fake-tool"], "im"))
         monkeypatch.setattr(md2tex.subprocess, "run", fake_run)
 
         rc = md2tex.main(["--eink", str(md_file)])
@@ -650,8 +650,7 @@ class TestEinkPreprocessing:
         img_dir = tmp_path / "images"
         img_dir.mkdir()
         src = img_dir / "photo.png"
-        # Generate a small test image with the same tool we'll use for processing.
-        tool = md2tex._eink_tool()
+        tool, _ = md2tex._eink_tool()
         subprocess.run(
             tool + ["-size", "32x32", "xc:gray50", str(src)],
             check=True, capture_output=True,
@@ -662,5 +661,52 @@ class TestEinkPreprocessing:
         assert "images/photo.eink.png" in result
         assert (img_dir / "photo.eink.png").exists()
         assert (img_dir / "photo.eink.png").stat().st_size > 0
+
+    @pytest.mark.skipif(
+        md2tex._eink_tool() is None,
+        reason="no image tool (magick/convert/gm) on PATH",
+    )
+    def test_eink_polarity_dark_text_on_light_bg(self, tmp_path):
+        """Output must keep dark ink dark and light paper light.
+
+        Regression for the GraphicsMagick sign-convention bug: a black square
+        on a white background was coming out as a black background with a
+        white outline.
+        """
+        tool, _ = md2tex._eink_tool()
+        src = tmp_path / "tile.png"
+        # White canvas, black filled square in the middle.
+        subprocess.run(
+            tool + [
+                "-size", "200x200", "xc:white",
+                "-fill", "black", "-draw", "rectangle 70,70 130,130",
+                str(src),
+            ],
+            check=True, capture_output=True,
+        )
+
+        md = "![T](tile.png)\n"
+        md2tex.convert(md, standalone=False, eink=True, base_dir=str(tmp_path))
+
+        # Inspect mean intensity of the processed output.  A 60×60 black
+        # square on a 200×200 white field is ~91% white, so the mean should
+        # be high.  An inverted result would be the opposite.
+        out = tmp_path / "tile.eink.png"
+        identify = "identify" if tool[0] == "magick" else tool[0]
+        identify_cmd = [identify]
+        if tool[0] == "gm":
+            identify_cmd.append("identify")
+        identify_cmd += ["-verbose", str(out)]
+        info = subprocess.run(
+            identify_cmd, check=True, capture_output=True, text=True,
+        ).stdout
+        # Mean line looks like "Mean: 60092.33 (0.9170)" (GM) or
+        # "mean: 60092.33 (0.9170)" (IM).  Pull the parenthesised normalized
+        # value — it's range-independent.
+        import re as _re
+        m = _re.search(r"[Mm]ean:[^\n]*\(([\d.]+)\)", info)
+        assert m, f"could not parse mean from identify output:\n{info[:500]}"
+        mean = float(m.group(1))
+        assert mean > 0.7, f"expected mostly-white output, got mean={mean}"
 
 
