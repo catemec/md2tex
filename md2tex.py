@@ -16,6 +16,8 @@ Supported input features:
 
 import os
 import re
+import shutil
+import subprocess
 import sys
 from html.parser import HTMLParser
 
@@ -177,6 +179,96 @@ def _normalize_quotes(text: str) -> str:
         return t
 
     return _with_math_protected(text, _do)
+
+
+# ---------------------------------------------------------------------------
+# E-ink image preprocessing
+# ---------------------------------------------------------------------------
+
+# Raster formats we'll convert.  Vector/PDF/SVG are skipped — adaptive
+# thresholding doesn't apply meaningfully and rasterizing them here would be
+# surprising.
+_EINK_RASTER_EXTS = {".jpg", ".jpeg", ".png", ".tif", ".tiff", ".bmp", ".webp", ".gif"}
+
+# Local adaptive thresholding window and offset.  A ~25px window handles
+# uneven lighting from photographed paper without binarizing whole regions
+# uniformly; +10% requires pixels to be modestly darker than local mean to
+# turn black, which keeps text crisp without flooding shadows.
+_EINK_LAT = "25x25+10%"
+
+
+def _eink_tool() -> list[str] | None:
+    """Return the base command for image processing, or ``None`` if unavailable."""
+    if shutil.which("magick"):
+        return ["magick"]
+    if shutil.which("convert"):
+        return ["convert"]
+    if shutil.which("gm"):
+        return ["gm", "convert"]
+    return None
+
+
+def _eink_output_path(rel_path: str) -> str:
+    """Return the relative path of the processed image for *rel_path*."""
+    return os.path.splitext(rel_path)[0] + ".eink.png"
+
+
+def _process_image_for_eink(rel_path: str, base_dir: str) -> str:
+    """Generate a high-contrast B&W copy of *rel_path* and return its relative path.
+
+    Uses local adaptive thresholding so uneven lighting in photographed
+    documents doesn't blow out content.  The processed file is cached
+    next to the original and only regenerated when the source is newer.
+    Returns *rel_path* unchanged when the source is missing, the format is
+    unsupported, or no image tool is on PATH.
+    """
+    ext = os.path.splitext(rel_path)[1].lower()
+    if ext not in _EINK_RASTER_EXTS:
+        return rel_path
+
+    abs_src = rel_path if os.path.isabs(rel_path) else os.path.join(base_dir, rel_path)
+    if not os.path.isfile(abs_src):
+        return rel_path
+
+    out_rel = _eink_output_path(rel_path)
+    abs_out = out_rel if os.path.isabs(out_rel) else os.path.join(base_dir, out_rel)
+
+    if os.path.isfile(abs_out) and os.path.getmtime(abs_out) >= os.path.getmtime(abs_src):
+        return out_rel
+
+    tool = _eink_tool()
+    if tool is None:
+        return rel_path
+
+    cmd = tool + [
+        abs_src,
+        "-colorspace", "Gray",
+        "-normalize",
+        "-lat", _EINK_LAT,
+        abs_out,
+    ]
+    try:
+        subprocess.run(cmd, check=True, capture_output=True)
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        return rel_path
+    return out_rel
+
+
+# Same shape as the figure regex in _convert_inline; kept separate so the
+# pre-pass can rewrite paths without invoking the full inline conversion.
+_IMAGE_REF_RE = re.compile(r'!\[([^\]]*)\]\(([^)"]+?)(?:\s+"([^"]*)")?\)')
+
+
+def _preprocess_eink_images(content: str, base_dir: str) -> str:
+    """Rewrite Markdown image refs to point at e-ink-processed copies."""
+    def _repl(m: re.Match) -> str:
+        alt = m.group(1)
+        path = m.group(2).strip()
+        caption = m.group(3)
+        new_path = _process_image_for_eink(path, base_dir)
+        caption_part = f' "{caption}"' if caption is not None else ""
+        return f"![{alt}]({new_path}{caption_part})"
+    return _IMAGE_REF_RE.sub(_repl, content)
 
 
 # ---------------------------------------------------------------------------
@@ -458,7 +550,13 @@ _PREAMBLE = r"""\documentclass{article}
 """
 
 
-def convert(content: str, *, standalone: bool = True) -> str:
+def convert(
+    content: str,
+    *,
+    standalone: bool = True,
+    eink: bool = False,
+    base_dir: str = ".",
+) -> str:
     """Convert Markdown *content* string to LaTeX.
 
     Parameters
@@ -469,7 +567,17 @@ def convert(content: str, *, standalone: bool = True) -> str:
         When ``True`` (default) wrap the body in a full LaTeX document
         (``\\documentclass`` … ``\\end{document}``).  When ``False``
         return only the converted body.
+    eink:
+        When ``True`` rewrite raster image references to point at
+        adaptive-thresholded B&W copies (``<name>.eink.png``) suitable
+        for e-ink displays.  Requires ``magick``, ``convert``, or ``gm``
+        on PATH; silently no-ops on missing tools or files.
+    base_dir:
+        Directory used to resolve relative image paths when ``eink`` is
+        enabled.  Ignored otherwise.
     """
+    if eink:
+        content = _preprocess_eink_images(content, base_dir)
     body = convert_body(content)
     if not standalone:
         return body
@@ -480,7 +588,13 @@ def convert(content: str, *, standalone: bool = True) -> str:
 # File-level API
 # ---------------------------------------------------------------------------
 
-def convert_file(input_path: str, output_path: str | None = None, *, standalone: bool = True) -> str:
+def convert_file(
+    input_path: str,
+    output_path: str | None = None,
+    *,
+    standalone: bool = True,
+    eink: bool = False,
+) -> str:
     """Convert *input_path* (``.md``) and write a ``.tex`` file.
 
     Returns the path of the output file.
@@ -492,7 +606,8 @@ def convert_file(input_path: str, output_path: str | None = None, *, standalone:
     with open(input_path, encoding="utf-8") as fh:
         content = fh.read()
 
-    tex = convert(content, standalone=standalone)
+    base_dir = os.path.dirname(os.path.abspath(input_path))
+    tex = convert(content, standalone=standalone, eink=eink, base_dir=base_dir)
 
     with open(output_path, "w", encoding="utf-8") as fh:
         fh.write(tex)
@@ -509,18 +624,39 @@ def main(argv: list[str] | None = None) -> int:
         argv = sys.argv[1:]
 
     if not argv or argv[0] in ("-h", "--help"):
-        print("Usage: md2tex.py <input.md> [output.tex]")
+        print("Usage: md2tex.py [--eink] <input.md> [output.tex]")
         print("Convert a Markdown file to well-formed LaTeX.")
+        print("  --eink   Preprocess raster images with adaptive thresholding")
+        print("           for legibility on e-ink displays.")
         return 0
 
-    input_path = argv[0]
-    output_path = argv[1] if len(argv) > 1 else None
+    eink = False
+    positional: list[str] = []
+    for arg in argv:
+        if arg == "--eink":
+            eink = True
+        else:
+            positional.append(arg)
+
+    if not positional:
+        print("Error: no input file given", file=sys.stderr)
+        return 1
+
+    input_path = positional[0]
+    output_path = positional[1] if len(positional) > 1 else None
 
     if not os.path.isfile(input_path):
         print(f"Error: file not found: {input_path}", file=sys.stderr)
         return 1
 
-    out = convert_file(input_path, output_path)
+    if eink and _eink_tool() is None:
+        print(
+            "Warning: --eink requested but no image tool found on PATH "
+            "(looked for magick, convert, gm). Image refs left unchanged.",
+            file=sys.stderr,
+        )
+
+    out = convert_file(input_path, output_path, eink=eink)
     print(f"Converted: {input_path}  →  {out}")
     return 0
 

@@ -1,8 +1,11 @@
 """Tests for md2tex.py — Markdown to LaTeX converter."""
 
 import os
+import struct
+import subprocess
 import sys
 import textwrap
+import zlib
 
 import pytest
 
@@ -499,3 +502,165 @@ class TestFileConversion:
         assert r"\begin{table}" in result     # HTML table converted
         assert r"\begin{figure}" in result    # figure converted
         assert "$" in result                  # math preserved
+
+
+# ---------------------------------------------------------------------------
+# E-ink image preprocessing
+# ---------------------------------------------------------------------------
+
+def _write_minimal_png(path):
+    """Write a 1x1 grayscale PNG so cache-aware path logic can see a real file."""
+    sig = b"\x89PNG\r\n\x1a\n"
+    ihdr = struct.pack(">IIBBBBB", 1, 1, 8, 0, 0, 0, 0)
+    idat = zlib.compress(b"\x00\x00")
+
+    def _chunk(tag, data):
+        return (
+            struct.pack(">I", len(data))
+            + tag
+            + data
+            + struct.pack(">I", zlib.crc32(tag + data) & 0xFFFFFFFF)
+        )
+
+    with open(path, "wb") as fh:
+        fh.write(sig)
+        fh.write(_chunk(b"IHDR", ihdr))
+        fh.write(_chunk(b"IDAT", idat))
+        fh.write(_chunk(b"IEND", b""))
+
+
+class TestEinkPreprocessing:
+    def test_no_eink_leaves_paths_alone(self, tmp_path):
+        img_dir = tmp_path / "images"
+        img_dir.mkdir()
+        _write_minimal_png(img_dir / "fig.png")
+        md = "![Alt](images/fig.png)\n"
+        result = md2tex.convert(md, standalone=False, base_dir=str(tmp_path))
+        assert "images/fig.png" in result
+        assert "fig.eink.png" not in result
+
+    def test_eink_rewrites_path_when_tool_runs(self, tmp_path, monkeypatch):
+        img_dir = tmp_path / "images"
+        img_dir.mkdir()
+        src = img_dir / "fig.png"
+        _write_minimal_png(src)
+
+        def fake_run(cmd, **kwargs):
+            # Materialize the destination so the cache check sees a real file.
+            _write_minimal_png(cmd[-1])
+            return subprocess.CompletedProcess(cmd, 0)
+
+        monkeypatch.setattr(md2tex, "_eink_tool", lambda: ["fake-tool"])
+        monkeypatch.setattr(md2tex.subprocess, "run", fake_run)
+
+        md = '![Photo](images/fig.png "Caption")\n'
+        result = md2tex.convert(md, standalone=False, eink=True, base_dir=str(tmp_path))
+        assert r"\includegraphics[width=\columnwidth]{images/fig.eink.png}" in result
+        assert r"\caption{Caption}" in result
+        assert (tmp_path / "images" / "fig.eink.png").exists()
+
+    def test_eink_skips_unsupported_extension(self, tmp_path, monkeypatch):
+        # PDFs/SVGs aren't raster — leave them alone.
+        (tmp_path / "diagram.pdf").write_bytes(b"%PDF-1.4\n")
+        monkeypatch.setattr(md2tex, "_eink_tool", lambda: ["fake-tool"])
+        monkeypatch.setattr(
+            md2tex.subprocess, "run",
+            lambda *a, **kw: pytest.fail("subprocess.run should not be called"),
+        )
+        md = "![D](diagram.pdf)\n"
+        result = md2tex.convert(md, standalone=False, eink=True, base_dir=str(tmp_path))
+        assert "diagram.pdf" in result
+        assert "eink" not in result
+
+    def test_eink_falls_back_when_source_missing(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(md2tex, "_eink_tool", lambda: ["fake-tool"])
+        monkeypatch.setattr(
+            md2tex.subprocess, "run",
+            lambda *a, **kw: pytest.fail("subprocess.run should not be called"),
+        )
+        md = "![Missing](images/nope.png)\n"
+        result = md2tex.convert(md, standalone=False, eink=True, base_dir=str(tmp_path))
+        assert "images/nope.png" in result
+        assert "eink" not in result
+
+    def test_eink_falls_back_when_no_tool(self, tmp_path, monkeypatch):
+        img = tmp_path / "fig.png"
+        _write_minimal_png(img)
+        monkeypatch.setattr(md2tex, "_eink_tool", lambda: None)
+        md = "![X](fig.png)\n"
+        result = md2tex.convert(md, standalone=False, eink=True, base_dir=str(tmp_path))
+        assert "{fig.png}" in result
+        assert "eink" not in result
+
+    def test_eink_caches_when_dest_newer(self, tmp_path, monkeypatch):
+        img_dir = tmp_path / "images"
+        img_dir.mkdir()
+        src = img_dir / "fig.png"
+        dst = img_dir / "fig.eink.png"
+        _write_minimal_png(src)
+        _write_minimal_png(dst)
+        # Ensure dst mtime >= src mtime
+        src_mtime = os.path.getmtime(src)
+        os.utime(dst, (src_mtime + 1, src_mtime + 1))
+
+        calls = []
+        monkeypatch.setattr(md2tex, "_eink_tool", lambda: ["fake-tool"])
+        monkeypatch.setattr(
+            md2tex.subprocess, "run",
+            lambda *a, **kw: calls.append(a) or subprocess.CompletedProcess(a, 0),
+        )
+
+        md = "![X](images/fig.png)\n"
+        result = md2tex.convert(md, standalone=False, eink=True, base_dir=str(tmp_path))
+        assert "images/fig.eink.png" in result
+        assert calls == []  # cache hit — no subprocess call
+
+    def test_cli_eink_flag(self, tmp_path, monkeypatch, capsys):
+        md_file = tmp_path / "doc.md"
+        md_file.write_text("![X](fig.png)\n", encoding="utf-8")
+        _write_minimal_png(tmp_path / "fig.png")
+
+        def fake_run(cmd, **kwargs):
+            _write_minimal_png(cmd[-1])
+            return subprocess.CompletedProcess(cmd, 0)
+
+        monkeypatch.setattr(md2tex, "_eink_tool", lambda: ["fake-tool"])
+        monkeypatch.setattr(md2tex.subprocess, "run", fake_run)
+
+        rc = md2tex.main(["--eink", str(md_file)])
+        assert rc == 0
+        tex = (tmp_path / "doc.tex").read_text(encoding="utf-8")
+        assert "fig.eink.png" in tex
+
+    def test_cli_eink_warns_when_no_tool(self, tmp_path, monkeypatch, capsys):
+        md_file = tmp_path / "doc.md"
+        md_file.write_text("Hi\n", encoding="utf-8")
+        monkeypatch.setattr(md2tex, "_eink_tool", lambda: None)
+        rc = md2tex.main(["--eink", str(md_file)])
+        assert rc == 0
+        err = capsys.readouterr().err
+        assert "no image tool" in err.lower()
+
+    @pytest.mark.skipif(
+        md2tex._eink_tool() is None,
+        reason="no image tool (magick/convert/gm) on PATH",
+    )
+    def test_eink_real_tool_smoke(self, tmp_path):
+        """End-to-end: actually run the local adaptive threshold pipeline."""
+        img_dir = tmp_path / "images"
+        img_dir.mkdir()
+        src = img_dir / "photo.png"
+        # Generate a small test image with the same tool we'll use for processing.
+        tool = md2tex._eink_tool()
+        subprocess.run(
+            tool + ["-size", "32x32", "xc:gray50", str(src)],
+            check=True, capture_output=True,
+        )
+
+        md = "![Photo](images/photo.png)\n"
+        result = md2tex.convert(md, standalone=False, eink=True, base_dir=str(tmp_path))
+        assert "images/photo.eink.png" in result
+        assert (img_dir / "photo.eink.png").exists()
+        assert (img_dir / "photo.eink.png").stat().st_size > 0
+
+
