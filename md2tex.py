@@ -110,8 +110,8 @@ _MATH_PATTERNS = [
 ]
 
 
-def _escape_ampersands(text: str) -> str:
-    """Escape ``&`` as ``\\&`` outside math regions; leave ``\\&`` alone."""
+def _with_math_protected(text: str, transform) -> str:
+    """Apply *transform* to *text* with math regions stashed out of the way."""
     stash: list[str] = []
 
     def _stash(m: re.Match) -> str:
@@ -121,11 +121,35 @@ def _escape_ampersands(text: str) -> str:
     for pattern in _MATH_PATTERNS:
         text = pattern.sub(_stash, text)
 
-    text = re.sub(r"(?<!\\)&", r"\\&", text)
+    text = transform(text)
 
     for idx, math in enumerate(stash):
         text = text.replace(f"\x00MATH{idx}\x00", math)
     return text
+
+
+def _escape_ampersands(text: str) -> str:
+    """Escape ``&`` as ``\\&`` outside math regions; leave ``\\&`` alone."""
+    return _with_math_protected(text, lambda t: re.sub(r"(?<!\\)&", r"\\&", t))
+
+
+def _normalize_quotes(text: str) -> str:
+    """Convert ASCII/Unicode quotes to LaTeX-style ``\\`\\``...''`` and `` ` ``/``'``.
+
+    ASCII ``"`` opens when not preceded by a non-space char, otherwise closes.
+    Unicode smart quotes map directly to their LaTeX equivalents.  ASCII ``'``
+    is left untouched (it doubles as an apostrophe and renders correctly).
+    """
+    def _do(t: str) -> str:
+        # Unicode smart quotes — direct mapping.
+        t = t.replace("“", "``").replace("”", "''")
+        t = t.replace("‘", "`").replace("’", "'")
+        # ASCII double quotes — open if not preceded by a non-space char.
+        t = re.sub(r'(?<!\S)"', "``", t)
+        t = t.replace('"', "''")
+        return t
+
+    return _with_math_protected(text, _do)
 
 
 # ---------------------------------------------------------------------------
@@ -143,7 +167,7 @@ def _figure_repl(m: re.Match) -> str:
         "\n"
         r"\begin{figure}[htbp]" + "\n"
         r"\centering" + "\n"
-        r"\includegraphics{" + path + "}\n"
+        r"\includegraphics[width=\columnwidth]{" + path + "}\n"
         r"\caption{" + caption + "}\n"
         r"\label{fig:" + label + "}\n"
         r"\end{figure}" + "\n"
@@ -168,6 +192,8 @@ def _convert_inline(text: str) -> str:
     text = re.sub(r"(?<![a-zA-Z0-9])_(.+?)_(?![a-zA-Z0-9])", r"\\textit{\1}", text)
     # Inline code: `code`
     text = re.sub(r"`([^`]+)`", r"\\texttt{\1}", text)
+    # Normalize ASCII/Unicode quote characters to LaTeX form.
+    text = _normalize_quotes(text)
     # Escape stray ampersands (preserves math regions and existing \&)
     text = _escape_ampersands(text)
     return text
@@ -188,7 +214,7 @@ def _close_list(result: list, state: dict) -> None:
 
 def _close_quote(result: list, state: dict) -> None:
     if state["in_quote"]:
-        result.append(r"\end{quote}")
+        result.append(r"\end{verbatim}")
         state["in_quote"] = False
 
 
@@ -286,9 +312,9 @@ def convert_body(content: str) -> str:
         if tab_quote:
             _close_list(result, state)
             if not state["in_quote"]:
-                result.append(r"\begin{quote}")
+                result.append(r"\begin{verbatim}")
                 state["in_quote"] = True
-            result.append(_convert_inline(tab_quote.group(2)))
+            result.append(tab_quote.group(2))
             i += 1
             continue
 
@@ -297,9 +323,9 @@ def convert_body(content: str) -> str:
         if std_quote:
             _close_list(result, state)
             if not state["in_quote"]:
-                result.append(r"\begin{quote}")
+                result.append(r"\begin{verbatim}")
                 state["in_quote"] = True
-            result.append(_convert_inline(std_quote.group(1)))
+            result.append(std_quote.group(1))
             i += 1
             continue
 

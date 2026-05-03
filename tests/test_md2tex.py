@@ -26,43 +26,50 @@ class TestBlockQuotes:
     def test_tab_indented_single_line(self):
         md = "\tThis is a block quote.\n"
         result = body(md)
-        assert r"\begin{quote}" in result
+        assert r"\begin{verbatim}" in result
         assert "This is a block quote." in result
-        assert r"\end{quote}" in result
+        assert r"\end{verbatim}" in result
 
-    def test_tab_indented_multi_line(self):
+    def test_tab_indented_multi_line_preserves_newlines(self):
         md = "\tFirst line.\n\tSecond line.\n"
         result = body(md)
-        assert result.count(r"\begin{quote}") == 1
-        assert result.count(r"\end{quote}") == 1
-        assert "First line." in result
-        assert "Second line." in result
+        # Single verbatim block, with the two lines on separate lines.
+        assert result.count(r"\begin{verbatim}") == 1
+        assert result.count(r"\end{verbatim}") == 1
+        assert "First line.\nSecond line." in result
 
     def test_four_space_indented(self):
         md = "    Indented with four spaces.\n"
         result = body(md)
-        assert r"\begin{quote}" in result
+        assert r"\begin{verbatim}" in result
         assert "Indented with four spaces." in result
-        assert r"\end{quote}" in result
+        assert r"\end{verbatim}" in result
 
     def test_standard_prefix(self):
         md = "> A quoted line.\n"
         result = body(md)
-        assert r"\begin{quote}" in result
+        assert r"\begin{verbatim}" in result
         assert "A quoted line." in result
-        assert r"\end{quote}" in result
+        assert r"\end{verbatim}" in result
 
-    def test_standard_prefix_multi_line(self):
+    def test_standard_prefix_multi_line_preserves_newlines(self):
         md = "> Line one.\n> Line two.\n"
         result = body(md)
-        assert result.count(r"\begin{quote}") == 1
-        assert result.count(r"\end{quote}") == 1
+        assert result.count(r"\begin{verbatim}") == 1
+        assert "Line one.\nLine two." in result
+
+    def test_quote_content_not_inline_processed(self):
+        # Verbatim should not transform markdown emphasis inside the quote.
+        md = "> **stays bold-source**\n"
+        result = body(md)
+        assert "**stays bold-source**" in result
+        assert r"\textbf" not in result
 
     def test_quote_closed_before_heading(self):
         md = "> Quote text.\n\n# Heading\n"
         result = body(md)
         # The quote must be closed before the heading command.
-        quote_end = result.index(r"\end{quote}")
+        quote_end = result.index(r"\end{verbatim}")
         section_start = result.index(r"\section")
         assert quote_end < section_start
 
@@ -151,7 +158,7 @@ class TestFigures:
         result = body(md)
         assert r"\begin{figure}" in result
         assert r"\centering" in result
-        assert r"\includegraphics{images/fig01.png}" in result
+        assert r"\includegraphics[width=\columnwidth]{images/fig01.png}" in result
         assert r"\caption{My Caption}" in result
         assert r"\label{fig:fig01}" in result
         assert r"\end{figure}" in result
@@ -159,14 +166,14 @@ class TestFigures:
     def test_figure_without_caption_uses_alt(self):
         md = "![Diagram](images/diagram.png)\n"
         result = body(md)
-        assert r"\includegraphics{images/diagram.png}" in result
+        assert r"\includegraphics[width=\columnwidth]{images/diagram.png}" in result
         assert r"\caption{Diagram}" in result
         assert r"\label{fig:diagram}" in result
 
     def test_figure_subdirectory_path(self):
         md = "![Graph](figures/chapter1/graph.pdf)\n"
         result = body(md)
-        assert r"\includegraphics{figures/chapter1/graph.pdf}" in result
+        assert r"\includegraphics[width=\columnwidth]{figures/chapter1/graph.pdf}" in result
         assert r"\label{fig:graph}" in result
 
     def test_figure_environment_tags(self):
@@ -217,6 +224,38 @@ class TestInlineFormatting:
     def test_hyperlink(self):
         result = body("[click here](https://example.com)\n")
         assert r"\href{https://example.com}{click here}" in result
+
+
+# ---------------------------------------------------------------------------
+# Quote normalization
+# ---------------------------------------------------------------------------
+
+class TestQuoteNormalization:
+    def test_double_quoted_word(self):
+        result = body('He said "hello" to me.\n')
+        assert "``hello''" in result
+
+    def test_double_quote_at_start_of_line(self):
+        result = body('"Open" first.\n')
+        assert "``Open''" in result
+
+    def test_unicode_smart_double_quotes(self):
+        result = body("She said “hi” back.\n")
+        assert "``hi''" in result
+
+    def test_unicode_smart_single_quotes(self):
+        result = body("It’s a ‘test’.\n")
+        assert "It's a `test'" in result
+
+    def test_quotes_in_math_preserved(self):
+        # ASCII " inside $...$ shouldn't be normalized.
+        result = body('Inline $a = "x"$ end.\n')
+        assert '$a = "x"$' in result
+
+    def test_apostrophe_left_alone(self):
+        # ASCII ' is intentionally untouched (works as apostrophe).
+        result = body("don't\n")
+        assert "don't" in result
 
 
 # ---------------------------------------------------------------------------
@@ -386,7 +425,7 @@ class TestFileConversion:
             content = fh.read()
         result = md2tex.convert(content, standalone=True)
         assert r"\documentclass" in result
-        assert r"\begin{quote}" in result     # block quote present
+        assert r"\begin{verbatim}" in result  # block quote (verbatim) present
         assert r"\begin{table}" in result     # HTML table converted
         assert r"\begin{figure}" in result    # figure converted
         assert "$" in result                  # math preserved
