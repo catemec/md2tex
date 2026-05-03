@@ -270,21 +270,26 @@ def _normalize_quotes(text: str) -> str:
 # surprising.
 _EINK_RASTER_EXTS = {".jpg", ".jpeg", ".png", ".tif", ".tiff", ".bmp", ".webp", ".gif"}
 
-# Local adaptive thresholding window size.  A ~25px window handles uneven
-# lighting from photographed paper without binarizing whole regions uniformly.
-_EINK_LAT_WINDOW = "25x25"
+# Histogram clip points (percent) for the post-normalize levels stretch.
+# Pixels darker than the low point go fully black; lighter than the high point
+# go fully white.  Keeps the extremes punchy without crushing midtones.
+_EINK_LEVEL_LOW = 5
+_EINK_LEVEL_HIGH = 95
 
-# Offset magnitude (percent of intensity range).  Pixels this much darker than
-# their local mean are treated as ink; everything else is background.
-_EINK_LAT_OFFSET = 10
+# Mid-tone gamma applied between those clip points.  >1.0 brightens the mids,
+# which compensates for e-ink panels reading slightly darker than the source
+# (rM Carta in particular).  Portraits and engravings keep their detail this
+# way instead of getting binarized into blobs.
+_EINK_LEVEL_GAMMA = 1.2
 
 
 def _eink_tool() -> tuple[list[str], str] | None:
     """Return ``(command, flavor)`` for image processing, or ``None``.
 
     *flavor* is ``"im"`` (ImageMagick) or ``"gm"`` (GraphicsMagick).
-    The two have opposite sign conventions for ``-lat``'s offset, so the
-    caller needs to know which it got.
+    The pipeline itself is portable across both, but the flavor is still
+    useful for callers that need to invoke ``identify`` or other companion
+    tools with the right invocation form.
     """
     if shutil.which("magick"):
         return ["magick"], "im"
@@ -311,13 +316,18 @@ def _eink_output_path(rel_path: str) -> str:
 
 
 def _process_image_for_eink(rel_path: str, base_dir: str) -> str:
-    """Generate a high-contrast B&W copy of *rel_path* and return its relative path.
+    """Generate a contrast-enhanced grayscale copy and return its relative path.
 
-    Uses local adaptive thresholding so uneven lighting in photographed
-    documents doesn't blow out content.  The processed file is cached
-    next to the original and only regenerated when the source is newer.
-    Returns *rel_path* unchanged when the source is missing, the format is
-    unsupported, or no image tool is on PATH.
+    Pipeline: convert to grayscale, normalize the histogram, then apply a
+    levels stretch with a brightening gamma.  This preserves midtone detail
+    (faces, engraved shading, line weight) far better than hard binarization
+    while still giving e-ink panels the punchy black-and-white range they
+    need to read clearly — reMarkable and similar devices dither the result
+    onto their 16-level gray panel themselves.
+
+    The processed file is cached next to the original and only regenerated
+    when the source is newer.  Returns *rel_path* unchanged when the source
+    is missing, the format is unsupported, or no image tool is on PATH.
     """
     ext = os.path.splitext(rel_path)[1].lower()
     if ext not in _EINK_RASTER_EXTS:
@@ -337,17 +347,17 @@ def _process_image_for_eink(rel_path: str, base_dir: str) -> str:
     if detected is None:
         return rel_path
 
-    tool, flavor = detected
-    # ImageMagick: pixels more than +offset BELOW local mean → black.
-    # GraphicsMagick: same effect requires a NEGATIVE sign on the offset.
-    sign = "+" if flavor == "im" else "-"
-    lat_arg = f"{_EINK_LAT_WINDOW}{sign}{_EINK_LAT_OFFSET}%"
+    tool, _flavor = detected
+    # The 3-arg "black,gamma,white" form of -level is required for
+    # GraphicsMagick compatibility — its 2-arg form means "black,gamma"
+    # rather than "black,white" as in ImageMagick.
+    level_arg = f"{_EINK_LEVEL_LOW}%,{_EINK_LEVEL_GAMMA},{_EINK_LEVEL_HIGH}%"
 
     cmd = tool + [
         abs_src,
         "-colorspace", "Gray",
         "-normalize",
-        "-lat", lat_arg,
+        "-level", level_arg,
         abs_out,
     ]
     try:
@@ -713,7 +723,7 @@ def convert(
         return only the converted body.
     eink:
         When ``True`` rewrite raster image references to point at
-        adaptive-thresholded B&W copies (``<name>.eink.png``) suitable
+        contrast-enhanced grayscale copies (``<name>.eink.png``) suitable
         for e-ink displays.  Requires ``magick``, ``convert``, or ``gm``
         on PATH; silently no-ops on missing tools or files.
     base_dir:
@@ -770,8 +780,8 @@ def main(argv: list[str] | None = None) -> int:
     if not argv or argv[0] in ("-h", "--help"):
         print("Usage: md2tex.py [--eink] <input.md> [output.tex]")
         print("Convert a Markdown file to well-formed LaTeX.")
-        print("  --eink   Preprocess raster images with adaptive thresholding")
-        print("           for legibility on e-ink displays.")
+        print("  --eink   Preprocess raster images into contrast-enhanced")
+        print("           grayscale copies for legibility on e-ink displays.")
         return 0
 
     eink = False

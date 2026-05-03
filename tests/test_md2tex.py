@@ -874,7 +874,7 @@ class TestEinkPreprocessing:
         reason="no image tool (magick/convert/gm) on PATH",
     )
     def test_eink_real_tool_smoke(self, tmp_path):
-        """End-to-end: actually run the local adaptive threshold pipeline."""
+        """End-to-end: actually run the grayscale-with-contrast pipeline."""
         img_dir = tmp_path / "images"
         img_dir.mkdir()
         src = img_dir / "photo.png"
@@ -897,9 +897,10 @@ class TestEinkPreprocessing:
     def test_eink_polarity_dark_text_on_light_bg(self, tmp_path):
         """Output must keep dark ink dark and light paper light.
 
-        Regression for the GraphicsMagick sign-convention bug: a black square
-        on a white background was coming out as a black background with a
-        white outline.
+        Sanity check that the pipeline never inverts tones — historically
+        a GraphicsMagick option-syntax mismatch could flip a black square
+        on white into the opposite, and the same risk exists for any future
+        argument tweak.
         """
         tool, _ = md2tex._eink_tool()
         src = tmp_path / "tile.png"
