@@ -244,6 +244,59 @@ class TestHeadings:
         assert r"\paragraph{Title}" in body("#### Title\n")
 
 
+class TestAllCapsHeadings:
+    def test_single_all_caps_line_becomes_subsection_star(self):
+        assert r"\subsection*{DELAWARE VALLEY}" in body("DELAWARE VALLEY\n")
+
+    def test_consecutive_all_caps_lines_joined(self):
+        md = "GROWING DIVERSITY ON THE DELAWARE:\nFRIENDS, FRIENDLIES, AND OTHERS\n"
+        expected = (
+            r"\subsection*{GROWING DIVERSITY ON THE DELAWARE: "
+            r"FRIENDS, FRIENDLIES, AND OTHERS}"
+        )
+        assert expected in body(md)
+
+    def test_all_caps_with_apostrophe(self):
+        assert r"\subsection*{THE FRIENDS' MIGRATION}" in body("THE FRIENDS' MIGRATION\n")
+
+    def test_mixed_case_line_not_promoted(self):
+        result = body("Quaker Founders, Guinea Achievers, American Reformers\n")
+        assert r"\subsection" not in result
+
+    def test_blank_separated_caps_runs_not_joined(self):
+        md = "FIRST HEADING\n\nSECOND HEADING\n"
+        result = body(md)
+        assert r"\subsection*{FIRST HEADING}" in result
+        assert r"\subsection*{SECOND HEADING}" in result
+        assert "FIRST HEADING SECOND HEADING" not in result
+
+    def test_single_letter_not_promoted(self):
+        result = body("I\n")
+        assert r"\subsection" not in result
+
+    def test_all_caps_inside_blockquote_not_promoted(self):
+        result = body("> SHOUTED WORDS\n")
+        assert r"\subsection" not in result
+        assert r"\begin{verbatim}" in result
+
+    def test_all_caps_inside_code_block_not_promoted(self):
+        result = body("```\nSHOUTED CODE\n```\n")
+        assert r"\subsection" not in result
+        assert "SHOUTED CODE" in result
+
+    def test_all_caps_heading_closes_open_list(self):
+        md = "- item one\n- item two\nALL CAPS HEADING\n"
+        result = body(md)
+        list_end = result.index(r"\end{itemize}")
+        heading_start = result.index(r"\subsection*")
+        assert list_end < heading_start
+
+    def test_markdown_heading_takes_precedence_over_all_caps(self):
+        result = body("# REAL HEADING\n")
+        assert r"\section{REAL HEADING}" in result
+        assert r"\subsection*" not in result
+
+
 # ---------------------------------------------------------------------------
 # Inline formatting
 # ---------------------------------------------------------------------------

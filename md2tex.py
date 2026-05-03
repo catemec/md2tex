@@ -421,6 +421,22 @@ def _convert_inline(text: str) -> str:
 # Block-level conversion state machine
 # ---------------------------------------------------------------------------
 
+def _is_all_caps_heading(line: str) -> bool:
+    """True when *line* looks like an ALL-CAPS subsection heading.
+
+    Requires at least two alphabetic characters and no lowercase letters.
+    Punctuation, digits, apostrophes, and spaces are allowed; a blank line
+    or letter-free line returns False.
+    """
+    stripped = line.strip()
+    if not stripped:
+        return False
+    letters = [c for c in stripped if c.isalpha()]
+    if len(letters) < 2:
+        return False
+    return all(c.isupper() for c in letters)
+
+
 def _close_list(result: list, state: dict) -> None:
     if state["in_itemize"]:
         result.append(r"\end{itemize}")
@@ -568,6 +584,22 @@ def convert_body(content: str) -> str:
             cmd = cmds[min(level - 1, len(cmds) - 1)]
             result.append(f"\\{cmd}{{{_convert_inline(title)}}}")
             i += 1
+            continue
+
+        # ------------------------------------------------------------------ #
+        # ALL-CAPS subsection heading — one or more consecutive all-caps      #
+        # lines collapse into a single \subsection*{...}.                      #
+        # ------------------------------------------------------------------ #
+        if _is_all_caps_heading(line):
+            caps_lines = [line.strip()]
+            j = i + 1
+            while j < len(lines) and _is_all_caps_heading(lines[j]):
+                caps_lines.append(lines[j].strip())
+                j += 1
+            _close_list(result, state)
+            title = " ".join(caps_lines)
+            result.append(r"\subsection*{" + _convert_inline(title) + "}")
+            i = j
             continue
 
         # ------------------------------------------------------------------ #
