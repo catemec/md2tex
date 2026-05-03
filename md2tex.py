@@ -151,7 +151,32 @@ _VERBATIM_UNICODE_MAP = {
     "•": "*",     # • bullet
     "…": "...",   # … horizontal ellipsis
     " ": " ",     # NBSP
+    **{_src: f"^{_dst}" for _src, _dst in {
+        "⁰": "0", "¹": "1", "²": "2", "³": "3", "⁴": "4",
+        "⁵": "5", "⁶": "6", "⁷": "7", "⁸": "8", "⁹": "9",
+        "⁺": "+", "⁻": "-", "⁼": "=", "⁽": "(", "⁾": ")", "ⁿ": "n",
+    }.items()},
 }
+
+
+# Unicode superscript characters → ASCII counterparts.  Used to build
+# $^{...}$ runs in regular prose; the verbatim map above covers the
+# verbatim case (where $...$ doesn't apply).
+_SUPERSCRIPT_MAP = {
+    "⁰": "0", "¹": "1", "²": "2", "³": "3", "⁴": "4",
+    "⁵": "5", "⁶": "6", "⁷": "7", "⁸": "8", "⁹": "9",
+    "⁺": "+", "⁻": "-", "⁼": "=", "⁽": "(", "⁾": ")", "ⁿ": "n",
+}
+
+_SUPERSCRIPT_RUN_RE = re.compile("[" + "".join(_SUPERSCRIPT_MAP) + "]+")
+
+
+def _convert_superscripts(text: str) -> str:
+    """Convert runs of Unicode superscript chars (e.g. ``²``) to ``$^{...}$``."""
+    def _repl(m: re.Match) -> str:
+        ascii_run = "".join(_SUPERSCRIPT_MAP[c] for c in m.group(0))
+        return f"$^{ascii_run}$" if len(ascii_run) == 1 else f"$^{{{ascii_run}}}$"
+    return _with_math_protected(text, lambda t: _SUPERSCRIPT_RUN_RE.sub(_repl, t))
 
 
 def _sanitize_verbatim(line: str) -> str:
@@ -336,6 +361,8 @@ def _convert_inline(text: str) -> str:
     text = re.sub(r"`([^`]+)`", r"\\texttt{\1}", text)
     # Normalize ASCII/Unicode quote characters to LaTeX form.
     text = _normalize_quotes(text)
+    # Unicode superscripts (¹²³…) → $^{...}$
+    text = _convert_superscripts(text)
     # Escape stray ampersands (preserves math regions and existing \&)
     text = _escape_ampersands(text)
     return text

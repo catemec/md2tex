@@ -284,6 +284,55 @@ class TestVerbatimSanitization:
         result = body(md)
         assert "1716–1807" in result
 
+    def test_superscript_in_blockquote_replaced(self):
+        md = "> Akan Ethics, 1988²\n"
+        result = body(md)
+        assert "1988^2" in result
+        assert "²" not in result
+
+    def test_multidigit_superscript_in_blockquote_replaced(self):
+        # Verbatim has no math mode, so each char is mapped independently
+        # (`^1^2`) rather than grouped into `^{12}`.
+        md = "> See note¹²\n"
+        result = body(md)
+        assert "note^1^2" in result
+        assert "¹" not in result and "²" not in result
+
+
+# ---------------------------------------------------------------------------
+# Unicode superscript footnote markers
+# ---------------------------------------------------------------------------
+
+class TestSuperscriptConversion:
+    def test_single_digit_superscript(self):
+        result = body("Akan Ethics, 1988²\n")
+        assert "1988$^2$" in result
+        assert "²" not in result
+
+    def test_trailing_superscript_after_punctuation(self):
+        result = body("Rhode Island.⁴\n")
+        assert "Island.$^4$" in result
+
+    def test_multidigit_superscript_uses_braces(self):
+        result = body("See note¹²\n")
+        assert "note$^{12}$" in result
+
+    def test_superscript_zero_through_nine(self):
+        # All Unicode superscript digits should map.
+        result = body("a⁰b¹c²d³e⁴f⁵g⁶h⁷i⁸j⁹\n")
+        for d in "0123456789":
+            assert f"$^{d}$" in result
+
+    def test_superscript_inside_math_preserved(self):
+        # Inside $...$ the original char should not be touched.
+        result = body("Inline $x²$ end.\n")
+        assert "$x²$" in result
+
+    def test_superscript_plus_minus(self):
+        result = body("ion X⁺ and Y⁻\n")
+        assert "X$^+$" in result
+        assert "Y$^-$" in result
+
 
 # ---------------------------------------------------------------------------
 # Preamble
