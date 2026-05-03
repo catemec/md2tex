@@ -90,6 +90,7 @@ def _html_table_to_latex(html: str) -> str:
         formatted = []
         for cell, is_hdr in zip(cells, flags):
             cell = _escape_ampersands(cell)
+            cell = _escape_percents(cell)
             formatted.append(r"\textbf{" + cell + "}" if is_hdr else cell)
         lines.append(" & ".join(formatted) + r" \\")
         lines.append(r"\hline")
@@ -134,6 +135,16 @@ def _with_math_protected(text: str, transform) -> str:
 def _escape_ampersands(text: str) -> str:
     """Escape ``&`` as ``\\&`` outside math regions; leave ``\\&`` alone."""
     return _with_math_protected(text, lambda t: re.sub(r"(?<!\\)&", r"\\&", t))
+
+
+def _escape_percents(text: str) -> str:
+    """Escape ``%`` as ``\\%`` outside math regions; leave ``\\%`` alone.
+
+    An unescaped ``%`` starts a LaTeX comment that consumes the rest of the
+    line, so e.g. a table cell containing ``196 (0.6%)`` would swallow its
+    own row terminator and corrupt the alignment of every following row.
+    """
+    return _with_math_protected(text, lambda t: re.sub(r"(?<!\\)%", r"\\%", t))
 
 
 def _escape_currency_dollars(text: str) -> str:
@@ -414,6 +425,8 @@ def _convert_inline(text: str) -> str:
     text = _convert_superscripts(text)
     # Escape stray ampersands (preserves math regions and existing \&)
     text = _escape_ampersands(text)
+    # Escape stray percent signs (preserves math regions and existing \%)
+    text = _escape_percents(text)
     return text
 
 

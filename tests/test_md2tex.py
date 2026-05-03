@@ -564,6 +564,54 @@ class TestAmpersandEscaping:
 
 
 # ---------------------------------------------------------------------------
+# Percent escaping
+# ---------------------------------------------------------------------------
+
+class TestPercentEscaping:
+    def test_plain_percent_in_paragraph(self):
+        assert r"50\%" in body("50% off today.\n")
+
+    def test_already_escaped_percent_unchanged(self):
+        result = body(r"50\% off" + "\n")
+        assert r"50\% off" in result
+        assert r"\\%" not in result
+
+    def test_multiple_percents(self):
+        result = body("Up 10% then down 5% then 0%.\n")
+        assert r"10\%" in result
+        assert r"5\%" in result
+        assert r"0\%" in result
+
+    def test_percent_in_inline_math_preserved(self):
+        # Inside math, % is still a comment to LaTeX, but the user's source is
+        # what it is — don't molest math regions.
+        result = body(r"Inline $a \% b$ here." + "\n")
+        assert r"$a \% b$" in result
+
+    def test_percent_outside_math_escaped_when_math_present(self):
+        result = body("Win rate 60% with $a + b$ end.\n")
+        assert r"60\%" in result
+        assert "$a + b$" in result
+
+    def test_percent_in_url_escaped(self):
+        result = body("[link](https://x.test/a%20b)\n")
+        assert r"\href{https://x.test/a\%20b}{link}" in result
+
+    def test_html_table_cell_percent_escaped(self):
+        md = (
+            "<table>\n"
+            "<tr><td>301 (0.7%)</td><td>196 (0.6%)</td></tr>\n"
+            "</table>\n"
+        )
+        result = body(md)
+        assert r"301 (0.7\%)" in result
+        assert r"196 (0.6\%)" in result
+        # Sanity: no bare `%)` survives in a table cell.
+        assert "0.7%)" not in result
+        assert "0.6%)" not in result
+
+
+# ---------------------------------------------------------------------------
 # Lists
 # ---------------------------------------------------------------------------
 
