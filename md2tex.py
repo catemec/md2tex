@@ -21,17 +21,17 @@ import subprocess
 import sys
 from html.parser import HTMLParser
 
-
 # ---------------------------------------------------------------------------
 # HTML table parser
 # ---------------------------------------------------------------------------
+
 
 class _TableParser(HTMLParser):
     """Collect rows/cells from a single HTML ``<table>`` block."""
 
     def __init__(self):
         super().__init__()
-        self.rows = []           # list of (cells, is_header_flags)
+        self.rows = []  # list of (cells, is_header_flags)
         self._row = []
         self._row_flags = []
         self._cell_buf = []
@@ -148,6 +148,16 @@ def _escape_percents(text: str) -> str:
     return _with_math_protected(text, lambda t: re.sub(r"(?<!\\)%", r"\\%", t))
 
 
+def _escape_carets(text: str) -> str:
+    """Escape ``^`` as ``\\^{}`` outside math regions; leave ``\\^`` alone.
+
+    Outside math mode ``^`` is a reserved LaTeX character that triggers a
+    "Missing $ inserted" error.  Inside math mode it is the superscript
+    operator and must be left untouched.
+    """
+    return _with_math_protected(text, lambda t: re.sub(r"(?<!\\)\^", r"\\^{}", t))
+
+
 def _escape_currency_dollars(text: str) -> str:
     """Escape ``$`` followed by a digit (currency) as ``\\$``.
 
@@ -168,26 +178,42 @@ def _escape_currency_dollars(text: str) -> str:
 _VERBATIM_UNICODE_MAP = {
     # Dash/hyphen variants — keys use \u escapes since several are visually
     # indistinguishable from ASCII `-` (or, for U+00AD, invisible) in source.
-    "\u2013": "-",   # EN DASH
+    "\u2013": "-",  # EN DASH
     "\u2014": "--",  # EM DASH
-    "\u2010": "-",   # HYPHEN
-    "\u2011": "-",   # NON-BREAKING HYPHEN
+    "\u2010": "-",  # HYPHEN
+    "\u2011": "-",  # NON-BREAKING HYPHEN
     "\u2012": "--",  # FIGURE DASH
     "\u2015": "--",  # HORIZONTAL BAR
-    "\u2212": "-",   # MINUS SIGN
-    "\u00ad": "",    # SOFT HYPHEN (invisible; advisory — drop)
-    "‘": "'",     # ‘ left single quote
-    "’": "'",     # ’ right single quote
-    "“": '"',     # “ left double quote
-    "”": '"',     # ” right double quote
-    "•": "*",     # • bullet
-    "…": "...",   # … horizontal ellipsis
-    " ": " ",     # NBSP
-    **{_src: f"^{_dst}" for _src, _dst in {
-        "⁰": "0", "¹": "1", "²": "2", "³": "3", "⁴": "4",
-        "⁵": "5", "⁶": "6", "⁷": "7", "⁸": "8", "⁹": "9",
-        "⁺": "+", "⁻": "-", "⁼": "=", "⁽": "(", "⁾": ")", "ⁿ": "n",
-    }.items()},
+    "\u2212": "-",  # MINUS SIGN
+    "\u00ad": "",  # SOFT HYPHEN (invisible; advisory — drop)
+    "‘": "'",  # ‘ left single quote
+    "’": "'",  # ’ right single quote
+    "“": '"',  # “ left double quote
+    "”": '"',  # ” right double quote
+    "•": "*",  # • bullet
+    "…": "...",  # … horizontal ellipsis
+    " ": " ",  # NBSP
+    **{
+        _src: f"^{_dst}"
+        for _src, _dst in {
+            "⁰": "0",
+            "¹": "1",
+            "²": "2",
+            "³": "3",
+            "⁴": "4",
+            "⁵": "5",
+            "⁶": "6",
+            "⁷": "7",
+            "⁸": "8",
+            "⁹": "9",
+            "⁺": "+",
+            "⁻": "-",
+            "⁼": "=",
+            "⁽": "(",
+            "⁾": ")",
+            "ⁿ": "n",
+        }.items()
+    },
 }
 
 
@@ -195,9 +221,22 @@ _VERBATIM_UNICODE_MAP = {
 # $^{...}$ runs in regular prose; the verbatim map above covers the
 # verbatim case (where $...$ doesn't apply).
 _SUPERSCRIPT_MAP = {
-    "⁰": "0", "¹": "1", "²": "2", "³": "3", "⁴": "4",
-    "⁵": "5", "⁶": "6", "⁷": "7", "⁸": "8", "⁹": "9",
-    "⁺": "+", "⁻": "-", "⁼": "=", "⁽": "(", "⁾": ")", "ⁿ": "n",
+    "⁰": "0",
+    "¹": "1",
+    "²": "2",
+    "³": "3",
+    "⁴": "4",
+    "⁵": "5",
+    "⁶": "6",
+    "⁷": "7",
+    "⁸": "8",
+    "⁹": "9",
+    "⁺": "+",
+    "⁻": "-",
+    "⁼": "=",
+    "⁽": "(",
+    "⁾": ")",
+    "ⁿ": "n",
 }
 
 _SUPERSCRIPT_RUN_RE = re.compile("[" + "".join(_SUPERSCRIPT_MAP) + "]+")
@@ -205,9 +244,11 @@ _SUPERSCRIPT_RUN_RE = re.compile("[" + "".join(_SUPERSCRIPT_MAP) + "]+")
 
 def _convert_superscripts(text: str) -> str:
     """Convert runs of Unicode superscript chars (e.g. ``²``) to ``$^{...}$``."""
+
     def _repl(m: re.Match) -> str:
         ascii_run = "".join(_SUPERSCRIPT_MAP[c] for c in m.group(0))
         return f"$^{ascii_run}$" if len(ascii_run) == 1 else f"$^{{{ascii_run}}}$"
+
     return _with_math_protected(text, lambda t: _SUPERSCRIPT_RUN_RE.sub(_repl, t))
 
 
@@ -223,19 +264,20 @@ def _sanitize_verbatim(line: str) -> str:
 # LaTeX composes ASCII hyphen-minus runs into the proper glyphs (`-` → hyphen,
 # `--` → en-dash, `---` → em-dash), so we collapse Unicode variants to match.
 _HYPHEN_MAP = {
-    "\u2010": "-",    # HYPHEN
-    "\u2011": "-",    # NON-BREAKING HYPHEN
-    "\u2012": "--",   # FIGURE DASH
-    "\u2013": "--",   # EN DASH
+    "\u2010": "-",  # HYPHEN
+    "\u2011": "-",  # NON-BREAKING HYPHEN
+    "\u2012": "--",  # FIGURE DASH
+    "\u2013": "--",  # EN DASH
     "\u2014": "---",  # EM DASH
     "\u2015": "---",  # HORIZONTAL BAR
-    "\u2212": "-",    # MINUS SIGN
-    "\u00ad": "",     # SOFT HYPHEN (advisory; drop)
+    "\u2212": "-",  # MINUS SIGN
+    "\u00ad": "",  # SOFT HYPHEN (advisory; drop)
 }
 
 
 def _normalize_hyphens(text: str) -> str:
     """Collapse Unicode hyphen/dash variants to LaTeX-canonical -, --, ---."""
+
     def _do(t: str) -> str:
         for src, dst in _HYPHEN_MAP.items():
             if src in t:
@@ -252,6 +294,7 @@ def _normalize_quotes(text: str) -> str:
     Unicode smart quotes map directly to their LaTeX equivalents.  ASCII ``'``
     is left untouched (it doubles as an apostrophe and renders correctly).
     """
+
     def _do(t: str) -> str:
         # Unicode smart quotes — direct mapping.
         t = t.replace("“", "``").replace("”", "''")
@@ -304,7 +347,9 @@ def _eink_tool() -> tuple[list[str], str] | None:
         try:
             out = subprocess.run(
                 ["convert", "-version"],
-                check=True, capture_output=True, text=True,
+                check=True,
+                capture_output=True,
+                text=True,
             ).stdout
         except (subprocess.CalledProcessError, FileNotFoundError):
             return ["convert"], "im"
@@ -343,7 +388,9 @@ def _process_image_for_eink(rel_path: str, base_dir: str) -> str:
     out_rel = _eink_output_path(rel_path)
     abs_out = out_rel if os.path.isabs(out_rel) else os.path.join(base_dir, out_rel)
 
-    if os.path.isfile(abs_out) and os.path.getmtime(abs_out) >= os.path.getmtime(abs_src):
+    if os.path.isfile(abs_out) and os.path.getmtime(abs_out) >= os.path.getmtime(
+        abs_src
+    ):
         return out_rel
 
     detected = _eink_tool()
@@ -358,9 +405,11 @@ def _process_image_for_eink(rel_path: str, base_dir: str) -> str:
 
     cmd = tool + [
         abs_src,
-        "-colorspace", "Gray",
+        "-colorspace",
+        "Gray",
         "-normalize",
-        "-level", level_arg,
+        "-level",
+        level_arg,
         abs_out,
     ]
     try:
@@ -377,6 +426,7 @@ _IMAGE_REF_RE = re.compile(r'!\[([^\]]*)\]\(([^)"]+?)(?:\s+"([^"]*)")?\)')
 
 def _preprocess_eink_images(content: str, base_dir: str) -> str:
     """Rewrite Markdown image refs to point at e-ink-processed copies."""
+
     def _repl(m: re.Match) -> str:
         alt = m.group(1)
         path = m.group(2).strip()
@@ -384,12 +434,14 @@ def _preprocess_eink_images(content: str, base_dir: str) -> str:
         new_path = _process_image_for_eink(path, base_dir)
         caption_part = f' "{caption}"' if caption is not None else ""
         return f"![{alt}]({new_path}{caption_part})"
+
     return _IMAGE_REF_RE.sub(_repl, content)
 
 
 # ---------------------------------------------------------------------------
 # Inline Markdown → LaTeX conversion
 # ---------------------------------------------------------------------------
+
 
 def _figure_repl(m: re.Match) -> str:
     alt = m.group(1)
@@ -440,12 +492,15 @@ def _convert_inline(text: str) -> str:
     text = _escape_ampersands(text)
     # Escape stray percent signs (preserves math regions and existing \%)
     text = _escape_percents(text)
+    # Escape stray carets (preserves math regions and existing \^)
+    text = _escape_carets(text)
     return text
 
 
 # ---------------------------------------------------------------------------
 # Block-level conversion state machine
 # ---------------------------------------------------------------------------
+
 
 def _is_all_caps_heading(line: str) -> bool:
     """True when *line* looks like an ALL-CAPS subsection heading.
@@ -488,7 +543,7 @@ def convert_body(content: str) -> str:
         "in_itemize": False,
         "in_enumerate": False,
         "in_quote": False,
-        "in_display_math": None,   # None or the closing delimiter ('$$' / '\\]')
+        "in_display_math": None,  # None or the closing delimiter ('$$' / '\\]')
     }
     html_buf: list[str] = []
     i = 0
@@ -745,6 +800,7 @@ def convert(
 # File-level API
 # ---------------------------------------------------------------------------
 
+
 def convert_file(
     input_path: str,
     output_path: str | None = None,
@@ -775,6 +831,7 @@ def convert_file(
 # ---------------------------------------------------------------------------
 # CLI entry point
 # ---------------------------------------------------------------------------
+
 
 def main(argv: list[str] | None = None) -> int:
     if argv is None:
