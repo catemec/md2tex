@@ -165,14 +165,16 @@ def _escape_currency_dollars(text: str) -> str:
 # verbatim, LaTeX's `--` / `---` ligatures don't fire, so en-dash collapses
 # to `-` and em-dash to `--` (visual approximation) rather than `--` / `---`.
 _VERBATIM_UNICODE_MAP = {
-    "–": "-",     # – en-dash
-    "—": "--",    # — em-dash
-    "‐": "-",     # ‐ hyphen
-    "‑": "-",     # ‑ non-breaking hyphen
-    "‒": "--",    # ‒ figure dash
-    "―": "--",    # ― horizontal bar
-    "−": "-",     # − minus sign
-    "­": "", # ­ soft hyphen (advisory; drop)
+    # Dash/hyphen variants — keys use \u escapes since several are visually
+    # indistinguishable from ASCII `-` (or, for U+00AD, invisible) in source.
+    "\u2013": "-",   # EN DASH
+    "\u2014": "--",  # EM DASH
+    "\u2010": "-",   # HYPHEN
+    "\u2011": "-",   # NON-BREAKING HYPHEN
+    "\u2012": "--",  # FIGURE DASH
+    "\u2015": "--",  # HORIZONTAL BAR
+    "\u2212": "-",   # MINUS SIGN
+    "\u00ad": "",    # SOFT HYPHEN (invisible; advisory — drop)
     "‘": "'",     # ‘ left single quote
     "’": "'",     # ’ right single quote
     "“": '"',     # “ left double quote
@@ -220,14 +222,14 @@ def _sanitize_verbatim(line: str) -> str:
 # LaTeX composes ASCII hyphen-minus runs into the proper glyphs (`-` → hyphen,
 # `--` → en-dash, `---` → em-dash), so we collapse Unicode variants to match.
 _HYPHEN_MAP = {
-    "‐": "-",    # ‐ HYPHEN
-    "‑": "-",    # ‑ NON-BREAKING HYPHEN
-    "‒": "--",   # ‒ FIGURE DASH
-    "–": "--",   # – EN DASH
-    "—": "---",  # — EM DASH
-    "―": "---",  # ― HORIZONTAL BAR
-    "−": "-",    # − MINUS SIGN
-    "­": "",     # ­ SOFT HYPHEN (advisory; drop)
+    "\u2010": "-",    # HYPHEN
+    "\u2011": "-",    # NON-BREAKING HYPHEN
+    "\u2012": "--",   # FIGURE DASH
+    "\u2013": "--",   # EN DASH
+    "\u2014": "---",  # EM DASH
+    "\u2015": "---",  # HORIZONTAL BAR
+    "\u2212": "-",    # MINUS SIGN
+    "\u00ad": "",     # SOFT HYPHEN (advisory; drop)
 }
 
 
