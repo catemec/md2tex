@@ -89,6 +89,7 @@ def _html_table_to_latex(html: str) -> str:
 
         formatted = []
         for cell, is_hdr in zip(cells, flags):
+            cell = _normalize_hyphens(cell)
             cell = _escape_ampersands(cell)
             cell = _escape_percents(cell)
             formatted.append(r"\textbf{" + cell + "}" if is_hdr else cell)

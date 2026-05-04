@@ -510,6 +510,20 @@ class TestHyphenNormalization:
         result = body("Equation $a − b = c – d$ end.\n")
         assert "$a − b = c – d$" in result
 
+    def test_endash_in_html_table_cell_normalized(self):
+        # Cells go through their own pipeline; hyphen normalization must run
+        # there too, otherwise raw en-dashes leak into the emitted .tex.
+        md = "<table>\n<tr><td>1733–34</td><td>449</td></tr>\n</table>\n"
+        result = body(md)
+        assert "1733--34" in result
+        assert "–" not in result
+
+    def test_endash_in_html_table_header_normalized(self):
+        md = "<table>\n<tr><th>1716–44</th></tr>\n</table>\n"
+        result = body(md)
+        assert r"\textbf{1716--44}" in result
+        assert "–" not in result
+
 
 # ---------------------------------------------------------------------------
 # Ampersand escaping
