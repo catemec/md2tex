@@ -93,6 +93,7 @@ def _html_table_to_latex(html: str) -> str:
             cell = _normalize_hyphens(cell)
             cell = _escape_ampersands(cell)
             cell = _escape_percents(cell)
+            cell = _escape_underscores(cell)
             formatted.append(r"\textbf{" + cell + "}" if is_hdr else cell)
         lines.append(" & ".join(formatted) + r" \\")
         lines.append(r"\hline")
@@ -157,6 +158,18 @@ def _escape_carets(text: str) -> str:
     operator and must be left untouched.
     """
     return _with_math_protected(text, lambda t: re.sub(r"(?<!\\)\^", r"\\^{}", t))
+
+
+def _escape_underscores(text: str) -> str:
+    """Escape ``_`` as ``\\_`` outside math regions; leave ``\\_`` alone.
+
+    Outside math mode ``_`` is a reserved LaTeX character (subscript) that
+    triggers a "Missing $ inserted" error.  Common offenders are URLs and
+    identifier-shaped strings that survived the inline pass — Markdown
+    italic ``_word_`` has already been converted to ``\\textit{word}`` by
+    the time this runs, so the only underscores left are literal ones.
+    """
+    return _with_math_protected(text, lambda t: re.sub(r"(?<!\\)_", r"\\_", t))
 
 
 def _escape_currency_dollars(text: str) -> str:
@@ -563,6 +576,9 @@ def _convert_inline(text: str, base_dir: str = ".") -> str:
     text = _escape_percents(text)
     # Escape stray carets (preserves math regions and existing \^)
     text = _escape_carets(text)
+    # Escape stray underscores (preserves math regions and existing \_).
+    # Must run after italic _word_ has been converted to \textit{word}.
+    text = _escape_underscores(text)
     return text
 
 

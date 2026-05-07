@@ -653,6 +653,50 @@ class TestPercentEscaping:
 
 
 # ---------------------------------------------------------------------------
+# Underscore escaping
+# ---------------------------------------------------------------------------
+
+class TestUnderscoreEscaping:
+    def test_underscore_in_url_escaped(self):
+        # Plain URL (not a Markdown link) — survives _convert_inline as text.
+        result = body("See http://example.com/foo_bar.html for details.\n")
+        assert r"http://example.com/foo\_bar.html" in result
+
+    def test_underscore_in_markdown_link_url_escaped(self):
+        result = body("[link](https://x.test/foo_bar)\n")
+        assert r"\href{https://x.test/foo\_bar}{link}" in result
+
+    def test_already_escaped_underscore_unchanged(self):
+        result = body(r"file\_name here" + "\n")
+        assert r"file\_name" in result
+        assert r"\\_" not in result
+
+    def test_underscore_in_inline_math_preserved(self):
+        # $l_x$ is a subscript — must not be escaped.
+        result = body(r"Notation $l_x$ and $q_x$ here." + "\n")
+        assert "$l_x$" in result
+        assert "$q_x$" in result
+        assert r"l\_x" not in result
+
+    def test_underscore_in_display_math_preserved(self):
+        md = "$$\na_i + b_j\n$$\n"
+        result = body(md)
+        assert "a_i + b_j" in result
+        assert r"a\_i" not in result
+
+    def test_italic_markdown_not_escaped(self):
+        # _word_ is italic markdown; should become \textit{word}, no \_.
+        result = body("This is _emphasized_ text.\n")
+        assert r"\textit{emphasized}" in result
+        assert r"\_" not in result
+
+    def test_html_table_cell_underscore_escaped(self):
+        md = "<table>\n<tr><td>foo_bar</td><td>OK</td></tr>\n</table>\n"
+        result = body(md)
+        assert r"foo\_bar" in result
+
+
+# ---------------------------------------------------------------------------
 # Lists
 # ---------------------------------------------------------------------------
 
