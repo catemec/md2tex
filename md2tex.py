@@ -630,11 +630,59 @@ _INDEX_HEADING_RE = re.compile(
 )
 _LATEX_HEADING_RE = re.compile(r"^\\(?:sub)*(?:section|paragraph)\*?\{")
 
-# A line is an index entry if it has a page reference (``, 123``) or a
-# cross-reference (``, see X``).  This filter keeps the leading explanatory
-# paragraph of an index ("Page numbers in italics …") out of entry mode.
-_INDEX_PAGEREF_RE = re.compile(r",\s+\d")
+# Markdown-level recognition of an ``INDEX`` heading — either ALL-CAPS on
+# its own line (the form OCR usually produces) or a Markdown ATX heading.
+_INDEX_MD_HEADING_RE = re.compile(r"^(?:#{1,6}\s+)?index\s*$", re.IGNORECASE)
+_MD_HEADING_RE = re.compile(r"^#{1,6}\s+\S")
+
+# Sentinel placed at the start of each indented sub-entry by the markdown
+# pre-pass.  HTML-comment-shaped so it survives ``_convert_inline`` (no
+# Markdown-active characters) and is trivial to detect at the post-pass.
+_INDEX_SUB_TOKEN = "<!--idxsub-->"
+
+# A line is an index entry if it ends with a page reference (digit, optionally
+# followed by digits / dashes / commas / periods / semicolons / spaces — so
+# "656", "614--21", "692.", "366--69, 728" all qualify) or contains a
+# cross-reference (``see X``).  Both cues miss the explanatory paragraph at
+# the top of an index ("Page numbers in italics …"), which ends with letters.
+_INDEX_PAGEREF_RE = re.compile(r"\d[\d\s.,;\-]*$")
 _INDEX_SEE_RE = re.compile(r"(?:^|[,;])\s*see\s+(?:also\s+)?[A-Za-z]")
+
+
+def _preprocess_index_indents(content: str) -> str:
+    """Within an ``INDEX`` section, strip leading whitespace from lines and
+    mark formerly-indented lines as sub-entries.
+
+    Two things this fixes at once:
+
+    1. md2tex's block-quote rule treats any line starting with a tab or
+       four spaces as ``verbatim``.  Inside an index that misfires on
+       sub-entries that the OCR happened to preserve indented, dropping
+       chunks of the index into typewriter-font verbatim blocks.
+    2. Where the OCR did preserve indentation, that's a far more reliable
+       sub-entry signal than any first-character heuristic — keeping it
+       lets the post-pass render real two-level structure for those lines.
+    """
+    lines = content.split("\n")
+    out: list[str] = []
+    in_section = False
+    for line in lines:
+        if _INDEX_MD_HEADING_RE.match(line.strip()):
+            in_section = True
+            out.append(line)
+            continue
+        # Any non-INDEX Markdown heading inside the section closes it.
+        if in_section and _MD_HEADING_RE.match(line) and not _INDEX_MD_HEADING_RE.match(
+            line.strip()
+        ):
+            in_section = False
+            out.append(line)
+            continue
+        if in_section and re.match(r"^(\t| {2,})\S", line):
+            out.append(_INDEX_SUB_TOKEN + line.lstrip())
+            continue
+        out.append(line)
+    return "\n".join(out)
 
 
 def _looks_like_index_entry(line: str) -> bool:
@@ -655,15 +703,22 @@ def _post_process_index(body: str) -> str:
     lines in ``\\hangindent`` paragraphs so the entry starts at the margin
     and any wrap lines indent under it.
 
-    No sub-entry indentation: the source markdown is flush left for both
-    main entries and sub-entries, and no first-character heuristic survives
-    the corner cases (lowercase-led main entries like "abolition", proper-
-    noun-led sub-entries like "African Americans in transmission of").
+    Lines marked by the markdown pre-pass with ``_INDEX_SUB_TOKEN`` (those
+    that were indented in the source) render as sub-entries — indented one
+    em with a deeper hanging continuation.  Lines without the marker stay
+    at the main-entry level; we don't guess sub-entries from line content
+    alone, since no first-character rule survives lowercase main entries
+    ("abolition") or proper-noun-led sub-entries.
+
+    Verbatim regions are passed through untouched — emitting ``\\hangindent``
+    inside ``\\begin{verbatim}`` would render the LaTeX commands as literal
+    text in the PDF.
     """
     lines = body.split("\n")
     out: list[str] = []
     in_section = False  # under an Index heading
     in_block = False  # currently emitting hanging-indent entries
+    in_verbatim = False  # inside a \begin{verbatim} … \end{verbatim} block
 
     def _close_block() -> None:
         nonlocal in_block
@@ -673,6 +728,18 @@ def _post_process_index(body: str) -> str:
 
     for line in lines:
         stripped = line.strip()
+
+        # Verbatim passthrough — no rewriting inside a verbatim block.
+        if in_verbatim:
+            out.append(line)
+            if stripped == r"\end{verbatim}":
+                in_verbatim = False
+            continue
+        if stripped == r"\begin{verbatim}":
+            _close_block()
+            out.append(line)
+            in_verbatim = True
+            continue
 
         if _INDEX_HEADING_RE.match(stripped):
             _close_block()
@@ -686,15 +753,26 @@ def _post_process_index(body: str) -> str:
             in_section = False
             continue
 
-        if in_section and _looks_like_index_entry(stripped):
+        if in_section and (
+            stripped.startswith(_INDEX_SUB_TOKEN)
+            or _looks_like_index_entry(stripped)
+        ):
             if not in_block:
                 out.append(r"\begingroup")
                 out.append(r"\setlength{\parindent}{0pt}")
                 out.append(r"\setlength{\parskip}{0pt}")
                 in_block = True
-            out.append(
-                r"\hangindent=1em\hangafter=1\noindent " + stripped + r"\par"
-            )
+            if stripped.startswith(_INDEX_SUB_TOKEN):
+                payload = stripped[len(_INDEX_SUB_TOKEN):].lstrip()
+                out.append(
+                    r"\hangindent=2em\hangafter=1\noindent\hspace*{1em}"
+                    + payload
+                    + r"\par"
+                )
+            else:
+                out.append(
+                    r"\hangindent=1em\hangafter=1\noindent " + stripped + r"\par"
+                )
             continue
 
         # Non-entry content inside the section (e.g. the leading explainer
@@ -974,7 +1052,12 @@ def convert(
     """
     if eink:
         content = _preprocess_eink_images(content, base_dir)
+    content = _preprocess_index_indents(content)
     body = convert_body(content, base_dir)
+    # Defensive: drop any stray sub-entry markers that didn't get consumed
+    # by the post-pass (e.g. a marked line that fell outside an Index
+    # section, or whose section heading the post-pass didn't recognise).
+    body = body.replace(_INDEX_SUB_TOKEN, "")
     if not standalone:
         return body
     return _PREAMBLE + "\n\\begin{document}\n\n" + body + "\n\n\\end{document}\n"

@@ -778,6 +778,54 @@ class TestIndexPostProcessing:
         section_idx = result.index(r"\section{Next Chapter}")
         assert endgroup_idx < section_idx
 
+    def test_indented_lines_render_as_subentries(self):
+        # An indented line under the INDEX heading should render as a sub-
+        # entry (deeper hangindent + leading hspace), and crucially must
+        # NOT trigger the block-quote rule that would put it in verbatim.
+        md = (
+            "INDEX\n\n"
+            "Creek nation, 396, 685\n"
+            "    Black Seminoles as slaves of, 708\n"
+            "    in War of 1812, 697\n"
+        )
+        result = body(md)
+        assert r"\noindent Creek nation, 396, 685\par" in result
+        assert r"\hangindent=2em" in result
+        assert r"\hspace*{1em}Black Seminoles as slaves of, 708\par" in result
+        assert r"\hspace*{1em}in War of 1812, 697\par" in result
+        # The pre-pass should have prevented the verbatim block from firing.
+        assert r"\begin{verbatim}" not in result
+        # The internal sub-entry token must not leak into output.
+        assert "idxsub" not in result
+
+    def test_subentry_token_does_not_leak_outside_index(self):
+        # If somehow a marked line ends up outside an index section (e.g.
+        # the section heading isn't recognised), the defensive strip in
+        # convert() should remove the marker so it never reaches the PDF.
+        md = (
+            "Some prose paragraph.\n"
+            "    Indented line under non-index prose.\n"
+        )
+        result = body(md)
+        assert "idxsub" not in result
+
+    def test_entry_with_quoted_phrase_before_pages(self):
+        # "as skilled "horse gentlers," 614--21" — the comma sits before
+        # a closing quote, not directly before the page digits.  The
+        # detector must still recognise this as an entry.
+        md = "INDEX\n\nas skilled \"horse gentlers,\" 614--21\n"
+        result = body(md)
+        assert r"\hangindent=1em\hangafter=1\noindent" in result
+        # The line must be wrapped, not left as bare paragraph text.
+        assert r"\par" in result.split(r"\hangindent=1em\hangafter=1\noindent ")[1]
+
+    def test_pageref_only_after_quote_is_entry(self):
+        # "Adams, John Quincy, 692." (period after page number) should
+        # qualify even though it ends with a punctuation char.
+        md = "INDEX\n\nAdams, John Quincy, 692.\n"
+        result = body(md)
+        assert r"\noindent Adams, John Quincy, 692.\par" in result
+
 
 # ---------------------------------------------------------------------------
 # Standalone document wrapper
