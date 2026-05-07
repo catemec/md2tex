@@ -201,7 +201,8 @@ class TestFigures:
         result = body(md)
         assert r"\begin{figure}" in result
         assert r"\centering" in result
-        assert r"\includegraphics[width=\columnwidth]{images/fig01.png}" in result
+        # Source file doesn't exist → unknown aspect ratio falls back to 0.5.
+        assert r"\includegraphics[width=0.5\columnwidth]{images/fig01.png}" in result
         assert r"\caption{My Caption}" in result
         assert r"\label{fig:fig01}" in result
         assert r"\end{figure}" in result
@@ -209,14 +210,14 @@ class TestFigures:
     def test_figure_without_caption_uses_alt(self):
         md = "![Diagram](images/diagram.png)\n"
         result = body(md)
-        assert r"\includegraphics[width=\columnwidth]{images/diagram.png}" in result
+        assert r"\includegraphics[width=0.5\columnwidth]{images/diagram.png}" in result
         assert r"\caption{Diagram}" in result
         assert r"\label{fig:diagram}" in result
 
     def test_figure_subdirectory_path(self):
         md = "![Graph](figures/chapter1/graph.pdf)\n"
         result = body(md)
-        assert r"\includegraphics[width=\columnwidth]{figures/chapter1/graph.pdf}" in result
+        assert r"\includegraphics[width=0.5\columnwidth]{figures/chapter1/graph.pdf}" in result
         assert r"\label{fig:graph}" in result
 
     def test_figure_environment_tags(self):
@@ -224,6 +225,30 @@ class TestFigures:
         result = body(md)
         assert r"\begin{figure}[htbp]" in result
         assert r"\end{figure}" in result
+
+    def test_landscape_image_uses_wide_width(self, tmp_path):
+        # Width > height → 0.7\columnwidth.
+        _write_sized_png(tmp_path / "wide.png", 200, 100)
+        result = md2tex.convert(
+            "![W](wide.png)\n", standalone=False, base_dir=str(tmp_path)
+        )
+        assert r"\includegraphics[width=0.7\columnwidth]{wide.png}" in result
+
+    def test_portrait_image_uses_narrow_width(self, tmp_path):
+        # Height > width → 0.5\columnwidth.
+        _write_sized_png(tmp_path / "tall.png", 100, 200)
+        result = md2tex.convert(
+            "![T](tall.png)\n", standalone=False, base_dir=str(tmp_path)
+        )
+        assert r"\includegraphics[width=0.5\columnwidth]{tall.png}" in result
+
+    def test_square_image_uses_narrow_width(self, tmp_path):
+        # w == h → "otherwise" branch → 0.5.
+        _write_sized_png(tmp_path / "sq.png", 120, 120)
+        result = md2tex.convert(
+            "![S](sq.png)\n", standalone=False, base_dir=str(tmp_path)
+        )
+        assert r"\includegraphics[width=0.5\columnwidth]{sq.png}" in result
 
 
 # ---------------------------------------------------------------------------
@@ -246,18 +271,18 @@ class TestHeadings:
 
 class TestAllCapsHeadings:
     def test_single_all_caps_line_becomes_subsection_star(self):
-        assert r"\subsection*{DELAWARE VALLEY}" in body("DELAWARE VALLEY\n")
+        assert r"\subsection*{Delaware Valley}" in body("DELAWARE VALLEY\n")
 
     def test_consecutive_all_caps_lines_joined(self):
         md = "GROWING DIVERSITY ON THE DELAWARE:\nFRIENDS, FRIENDLIES, AND OTHERS\n"
         expected = (
-            r"\subsection*{GROWING DIVERSITY ON THE DELAWARE: "
-            r"FRIENDS, FRIENDLIES, AND OTHERS}"
+            r"\subsection*{Growing Diversity On The Delaware: "
+            r"Friends, Friendlies, And Others}"
         )
         assert expected in body(md)
 
     def test_all_caps_with_apostrophe(self):
-        assert r"\subsection*{THE FRIENDS' MIGRATION}" in body("THE FRIENDS' MIGRATION\n")
+        assert r"\subsection*{The Friends' Migration}" in body("THE FRIENDS' MIGRATION\n")
 
     def test_mixed_case_line_not_promoted(self):
         result = body("Quaker Founders, Guinea Achievers, American Reformers\n")
@@ -266,9 +291,9 @@ class TestAllCapsHeadings:
     def test_blank_separated_caps_runs_not_joined(self):
         md = "FIRST HEADING\n\nSECOND HEADING\n"
         result = body(md)
-        assert r"\subsection*{FIRST HEADING}" in result
-        assert r"\subsection*{SECOND HEADING}" in result
-        assert "FIRST HEADING SECOND HEADING" not in result
+        assert r"\subsection*{First Heading}" in result
+        assert r"\subsection*{Second Heading}" in result
+        assert "First Heading Second Heading" not in result
 
     def test_single_letter_not_promoted(self):
         result = body("I\n")
@@ -531,12 +556,14 @@ class TestHyphenNormalization:
 
 class TestAmpersandEscaping:
     def test_plain_ampersand_in_paragraph(self):
-        assert r"AT\&T" in body("AT&T\n")
+        # Mixed-case prose so the ALL-CAPS heading detector doesn't fire
+        # and re-case the line out from under us.
+        assert r"Reading AT\&T docs" in body("Reading AT&T docs\n")
 
     def test_already_escaped_ampersand_unchanged(self):
         # Existing \& should not become \\&.
-        result = body(r"AT\&T" + "\n")
-        assert r"AT\&T" in result
+        result = body(r"Reading AT\&T docs" + "\n")
+        assert r"Reading AT\&T docs" in result
         assert r"\\&" not in result
 
     def test_multiple_ampersands(self):
@@ -750,10 +777,15 @@ class TestFileConversion:
 # E-ink image preprocessing
 # ---------------------------------------------------------------------------
 
-def _write_minimal_png(path):
-    """Write a 1x1 grayscale PNG so cache-aware path logic can see a real file."""
+def _write_sized_png(path, width: int, height: int):
+    """Write a grayscale PNG with a valid IHDR for dimension-based assertions.
+
+    The IDAT payload doesn't actually decode to a *width × height* image —
+    that's fine: nothing in the test suite decodes pixels, and the
+    dimension parser only reads IHDR.
+    """
     sig = b"\x89PNG\r\n\x1a\n"
-    ihdr = struct.pack(">IIBBBBB", 1, 1, 8, 0, 0, 0, 0)
+    ihdr = struct.pack(">IIBBBBB", width, height, 8, 0, 0, 0, 0)
     idat = zlib.compress(b"\x00\x00")
 
     def _chunk(tag, data):
@@ -769,6 +801,11 @@ def _write_minimal_png(path):
         fh.write(_chunk(b"IHDR", ihdr))
         fh.write(_chunk(b"IDAT", idat))
         fh.write(_chunk(b"IEND", b""))
+
+
+def _write_minimal_png(path):
+    """Write a 1x1 grayscale PNG so cache-aware path logic can see a real file."""
+    _write_sized_png(path, 1, 1)
 
 
 class TestEinkPreprocessing:
@@ -797,7 +834,8 @@ class TestEinkPreprocessing:
 
         md = '![Photo](images/fig.png "Caption")\n'
         result = md2tex.convert(md, standalone=False, eink=True, base_dir=str(tmp_path))
-        assert r"\includegraphics[width=\columnwidth]{images/fig.eink.png}" in result
+        # Test PNG is 1×1 (square), so the width factor is the non-landscape default.
+        assert r"\includegraphics[width=0.5\columnwidth]{images/fig.eink.png}" in result
         assert r"\caption{Caption}" in result
         assert (tmp_path / "images" / "fig.eink.png").exists()
 

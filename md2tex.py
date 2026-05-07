@@ -6,7 +6,7 @@ Supported input features:
 - Tables in HTML (``<table>``...``</table>``)
 - Equations in Math TeX / LaTeX (``$...$``, ``$$...$$``, ``\\(...\\)``, ``\\[...\\]``)
 - Figures in Markdown reference format pointing to a subdirectory
-  (``![alt](subdir/image.ext "Caption")``)
+  (``![alt "Caption"](subdir/image.ext)``)
 - Headings (``#`` … ``######``)
 - Bold, italic, inline code, hyperlinks
 - Fenced code blocks
@@ -17,6 +17,7 @@ Supported input features:
 import os
 import re
 import shutil
+import struct
 import subprocess
 import sys
 from html.parser import HTMLParser
@@ -443,25 +444,93 @@ def _preprocess_eink_images(content: str, base_dir: str) -> str:
 # ---------------------------------------------------------------------------
 
 
-def _figure_repl(m: re.Match) -> str:
-    alt = m.group(1)
-    path = m.group(2).strip()
-    caption = m.group(3).strip() if m.group(3) else alt
-    # Build a safe label from the file's base name.
-    basename = os.path.splitext(os.path.basename(path))[0]
-    label = re.sub(r"[^a-zA-Z0-9]+", "", basename).lower()
-    return (
-        "\n"
-        r"\begin{figure}[htbp]" + "\n"
-        r"\centering" + "\n"
-        r"\includegraphics[width=\columnwidth]{" + path + "}\n"
-        r"\caption{" + caption + "}\n"
-        r"\label{fig:" + label + "}\n"
-        r"\end{figure}" + "\n"
-    )
+def _image_dimensions(abs_path: str) -> tuple[int, int] | None:
+    """Return ``(width, height)`` for *abs_path* by reading the file header.
+
+    Stdlib-only; supports PNG, GIF, BMP, and JPEG. Other formats (PDF, SVG,
+    WebP, TIFF, …) and unreadable files return ``None`` — callers should
+    fall back to a default width factor in that case.
+    """
+    try:
+        with open(abs_path, "rb") as fh:
+            head = fh.read(32)
+            if head.startswith(b"\x89PNG\r\n\x1a\n"):
+                w, h = struct.unpack(">II", head[16:24])
+                return w, h
+            if head[:6] in (b"GIF87a", b"GIF89a"):
+                w, h = struct.unpack("<HH", head[6:10])
+                return w, h
+            if head[:2] == b"BM":
+                w, h = struct.unpack("<ii", head[18:26])
+                return abs(w), abs(h)
+            if head[:2] == b"\xff\xd8":
+                fh.seek(2)
+                while True:
+                    byte = fh.read(1)
+                    while byte and byte != b"\xff":
+                        byte = fh.read(1)
+                    while byte == b"\xff":
+                        byte = fh.read(1)
+                    if not byte:
+                        return None
+                    marker = byte[0]
+                    # Stand-alone markers carry no payload.
+                    if marker == 0x01 or 0xD0 <= marker <= 0xD9:
+                        continue
+                    seg_len_bytes = fh.read(2)
+                    if len(seg_len_bytes) < 2:
+                        return None
+                    seg_len = struct.unpack(">H", seg_len_bytes)[0]
+                    # SOFn frames hold the dimensions; skip DHT/JPG/DAC.
+                    if 0xC0 <= marker <= 0xCF and marker not in (0xC4, 0xC8, 0xCC):
+                        fh.read(1)  # sample precision
+                        h, w = struct.unpack(">HH", fh.read(4))
+                        return w, h
+                    fh.read(seg_len - 2)
+    except (OSError, struct.error):
+        return None
+    return None
 
 
-def _convert_inline(text: str) -> str:
+def _figure_width_factor(path: str, base_dir: str) -> str:
+    """Return LaTeX width multiplier for an image: ``0.7`` if landscape, ``0.5`` else.
+
+    "Landscape" means width > height. Square or portrait images, plus any
+    image whose dimensions can't be read (missing file, unsupported format),
+    fall to ``0.5`` — the safer default for fitting within a column.
+    """
+    abs_path = path if os.path.isabs(path) else os.path.join(base_dir, path)
+    dims = _image_dimensions(abs_path)
+    if dims is None:
+        return "0.5"
+    w, h = dims
+    return "0.7" if w > h else "0.5"
+
+
+def _make_figure_repl(base_dir: str):
+    """Build a regex replacement closure for Markdown figures with *base_dir*."""
+
+    def _figure_repl(m: re.Match) -> str:
+        alt = m.group(1)
+        path = m.group(2).strip()
+        caption = m.group(3).strip() if m.group(3) else alt
+        basename = os.path.splitext(os.path.basename(path))[0]
+        label = re.sub(r"[^a-zA-Z0-9]+", "", basename).lower()
+        width = _figure_width_factor(path, base_dir)
+        return (
+            "\n"
+            r"\begin{figure}[htbp]" + "\n"
+            r"\centering" + "\n"
+            r"\includegraphics[width=" + width + r"\columnwidth]{" + path + "}\n"
+            r"\caption{" + caption + "}\n"
+            r"\label{fig:" + label + "}\n"
+            r"\end{figure}" + "\n"
+        )
+
+    return _figure_repl
+
+
+def _convert_inline(text: str, base_dir: str = ".") -> str:
     """Apply inline Markdown → LaTeX substitutions to *text*."""
     # Escape currency $ first — before anything that protects math regions,
     # because the math-pairing regex would otherwise mis-pair currency $.
@@ -469,7 +538,7 @@ def _convert_inline(text: str) -> str:
     # Figures: ![alt](path "caption") or ![alt](path)
     text = re.sub(
         r'!\[([^\]]*)\]\(([^)"]+?)(?:\s+"([^"]*)")?\)',
-        _figure_repl,
+        _make_figure_repl(base_dir),
         text,
     )
     # Hyperlinks: [text](url)  — must come after figures
@@ -500,6 +569,23 @@ def _convert_inline(text: str) -> str:
 # ---------------------------------------------------------------------------
 # Block-level conversion state machine
 # ---------------------------------------------------------------------------
+
+
+def _to_title_case(text: str) -> str:
+    """Convert ALL-CAPS *text* to Title Case (each word capitalized).
+
+    Operates on letter runs (apostrophes count as part of the word so
+    ``DON'T`` becomes ``Don't``). Punctuation, digits, and whitespace are
+    untouched. Intended for ALL-CAPS prose where the original casing is
+    already lost — acronyms like ``URL`` will flatten to ``Url``, which is
+    acceptable in that context and avoids hbox/overfull issues for headings.
+    """
+
+    def _cap(m: re.Match) -> str:
+        word = m.group(0)
+        return word[0].upper() + word[1:].lower()
+
+    return re.sub(r"[A-Za-z][A-Za-z']*", _cap, text)
 
 
 def _is_all_caps_heading(line: str) -> bool:
@@ -533,8 +619,12 @@ def _close_quote(result: list, state: dict) -> None:
         state["in_quote"] = False
 
 
-def convert_body(content: str) -> str:
-    """Convert Markdown *content* to a LaTeX body (no document wrapper)."""
+def convert_body(content: str, base_dir: str = ".") -> str:
+    """Convert Markdown *content* to a LaTeX body (no document wrapper).
+
+    *base_dir* is used to resolve relative figure paths so that image
+    dimensions can be inspected for choosing a per-figure width factor.
+    """
     lines = content.splitlines()
     result: list[str] = []
     state = {
@@ -663,7 +753,7 @@ def convert_body(content: str) -> str:
                 "subparagraph",
             ]
             cmd = cmds[min(level - 1, len(cmds) - 1)]
-            result.append(f"\\{cmd}{{{_convert_inline(title)}}}")
+            result.append(f"\\{cmd}{{{_convert_inline(title, base_dir)}}}")
             i += 1
             continue
 
@@ -678,8 +768,8 @@ def convert_body(content: str) -> str:
                 caps_lines.append(lines[j].strip())
                 j += 1
             _close_list(result, state)
-            title = " ".join(caps_lines)
-            result.append(r"\subsection*{" + _convert_inline(title) + "}")
+            title = _to_title_case(" ".join(caps_lines))
+            result.append(r"\subsection*{" + _convert_inline(title, base_dir) + "}")
             i = j
             continue
 
@@ -694,7 +784,7 @@ def convert_body(content: str) -> str:
             if not state["in_itemize"]:
                 result.append(r"\begin{itemize}")
                 state["in_itemize"] = True
-            result.append(r"  \item " + _convert_inline(ul.group(2)))
+            result.append(r"  \item " + _convert_inline(ul.group(2), base_dir))
             i += 1
             continue
 
@@ -709,7 +799,7 @@ def convert_body(content: str) -> str:
             if not state["in_enumerate"]:
                 result.append(r"\begin{enumerate}")
                 state["in_enumerate"] = True
-            result.append(r"  \item " + _convert_inline(ol.group(2)))
+            result.append(r"  \item " + _convert_inline(ol.group(2), base_dir))
             i += 1
             continue
 
@@ -735,7 +825,7 @@ def convert_body(content: str) -> str:
         # ------------------------------------------------------------------ #
         # Regular paragraph line                                               #
         # ------------------------------------------------------------------ #
-        result.append(_convert_inline(line))
+        result.append(_convert_inline(line, base_dir))
         i += 1
 
     # Close any environments still open at end of file.
@@ -785,12 +875,13 @@ def convert(
         for e-ink displays.  Requires ``magick``, ``convert``, or ``gm``
         on PATH; silently no-ops on missing tools or files.
     base_dir:
-        Directory used to resolve relative image paths when ``eink`` is
-        enabled.  Ignored otherwise.
+        Directory used to resolve relative image paths — both for the
+        optional ``eink`` rewrite pass and for inspecting figure dimensions
+        to pick a width factor in the LaTeX output.
     """
     if eink:
         content = _preprocess_eink_images(content, base_dir)
-    body = convert_body(content)
+    body = convert_body(content, base_dir)
     if not standalone:
         return body
     return _PREAMBLE + "\n\\begin{document}\n\n" + body + "\n\n\\end{document}\n"
