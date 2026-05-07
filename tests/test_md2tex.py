@@ -722,6 +722,12 @@ class TestLists:
         section_start = result.index(r"\section")
         assert itemize_end < section_start
 
+    def test_loose_ordered_list_stays_one_enumerate(self):
+        md = "1. First\n\n2. Second\n\n3. Third\n"
+        result = body(md)
+        assert result.count(r"\begin{enumerate}") == 1
+        assert result.count(r"\end{enumerate}") == 1
+
 
 # ---------------------------------------------------------------------------
 # Code blocks

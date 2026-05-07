@@ -986,6 +986,13 @@ def convert_body(content: str, base_dir: str = ".") -> str:
             i += 1
             continue
 
+        # Blank lines inside a list shouldn't close it — keep numbering
+        # continuous across paragraph-separated items.
+        if line.strip() == "":
+            result.append("")
+            i += 1
+            continue
+
         # Close any open list on non-list content
         _close_list(result, state)
 
@@ -994,14 +1001,6 @@ def convert_body(content: str, base_dir: str = ".") -> str:
         # ------------------------------------------------------------------ #
         if re.match(r"^[-*_]{3,}\s*$", line):
             result.append(r"\hrule")
-            i += 1
-            continue
-
-        # ------------------------------------------------------------------ #
-        # Blank line                                                           #
-        # ------------------------------------------------------------------ #
-        if line.strip() == "":
-            result.append("")
             i += 1
             continue
 
