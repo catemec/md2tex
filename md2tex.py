@@ -844,11 +844,15 @@ def convert_body(content: str, base_dir: str = ".") -> str:
 _PREAMBLE = r"""\documentclass{article}
 \usepackage[utf8]{inputenc}
 \usepackage[T1]{fontenc}
+\usepackage{lmodern}
 \usepackage{amsmath}
 \usepackage{graphicx}
 \usepackage{hyperref}
 \usepackage{booktabs}
 \usepackage{adjustbox}
+\usepackage{microtype}
+\emergencystretch=3em
+\tolerance=1000
 """
 
 
