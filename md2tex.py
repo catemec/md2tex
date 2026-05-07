@@ -619,6 +619,95 @@ def _close_quote(result: list, state: dict) -> None:
         state["in_quote"] = False
 
 
+# ---------------------------------------------------------------------------
+# Index section post-processor
+# ---------------------------------------------------------------------------
+
+# An ``Index`` heading at any sectioning level (\section, \subsection, …) opens
+# index mode; the next sectioning command at any level closes it.
+_INDEX_HEADING_RE = re.compile(
+    r"^\\(?:sub)*(?:section|paragraph)\*?\{Index\}\s*$"
+)
+_LATEX_HEADING_RE = re.compile(r"^\\(?:sub)*(?:section|paragraph)\*?\{")
+
+# A line is an index entry if it has a page reference (``, 123``) or a
+# cross-reference (``, see X``).  This filter keeps the leading explanatory
+# paragraph of an index ("Page numbers in italics …") out of entry mode.
+_INDEX_PAGEREF_RE = re.compile(r",\s+\d")
+_INDEX_SEE_RE = re.compile(r"(?:^|[,;])\s*see\s+(?:also\s+)?[A-Za-z]")
+
+
+def _looks_like_index_entry(line: str) -> bool:
+    # Trailing ``:`` — main entry that introduces a sub-entry block (e.g.
+    # "African Americans:") — has neither page refs nor a ``see`` cue, so
+    # it needs its own clause or it merges into the next paragraph.
+    if line.endswith(":"):
+        return True
+    return bool(_INDEX_PAGEREF_RE.search(line) or _INDEX_SEE_RE.search(line))
+
+
+def _post_process_index(body: str) -> str:
+    """Reformat lines under an ``Index`` heading as hanging-indent entries.
+
+    Without this pass every entry collapses into one flowing paragraph in
+    the PDF: the source markdown puts each entry on its own line but with
+    no blank lines between them, so LaTeX joins them.  We wrap entry-shaped
+    lines in ``\\hangindent`` paragraphs so the entry starts at the margin
+    and any wrap lines indent under it.
+
+    No sub-entry indentation: the source markdown is flush left for both
+    main entries and sub-entries, and no first-character heuristic survives
+    the corner cases (lowercase-led main entries like "abolition", proper-
+    noun-led sub-entries like "African Americans in transmission of").
+    """
+    lines = body.split("\n")
+    out: list[str] = []
+    in_section = False  # under an Index heading
+    in_block = False  # currently emitting hanging-indent entries
+
+    def _close_block() -> None:
+        nonlocal in_block
+        if in_block:
+            out.append(r"\endgroup")
+            in_block = False
+
+    for line in lines:
+        stripped = line.strip()
+
+        if _INDEX_HEADING_RE.match(stripped):
+            _close_block()
+            out.append(line)
+            in_section = True
+            continue
+
+        if in_section and _LATEX_HEADING_RE.match(stripped):
+            _close_block()
+            out.append(line)
+            in_section = False
+            continue
+
+        if in_section and _looks_like_index_entry(stripped):
+            if not in_block:
+                out.append(r"\begingroup")
+                out.append(r"\setlength{\parindent}{0pt}")
+                out.append(r"\setlength{\parskip}{0pt}")
+                in_block = True
+            out.append(
+                r"\hangindent=1em\hangafter=1\noindent " + stripped + r"\par"
+            )
+            continue
+
+        # Non-entry content inside the section (e.g. the leading explainer
+        # paragraph, or a blank line). Pass it through unchanged, but close
+        # any open entry block first so the following entries restart it.
+        if in_section and stripped:
+            _close_block()
+        out.append(line)
+
+    _close_block()
+    return "\n".join(out)
+
+
 def convert_body(content: str, base_dir: str = ".") -> str:
     """Convert Markdown *content* to a LaTeX body (no document wrapper).
 
@@ -834,7 +923,7 @@ def convert_body(content: str, base_dir: str = ".") -> str:
     if state["in_code_block"]:
         result.append(r"\end{verbatim}")
 
-    return "\n".join(result)
+    return _post_process_index("\n".join(result))
 
 
 # ---------------------------------------------------------------------------

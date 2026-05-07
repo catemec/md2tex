@@ -710,6 +710,76 @@ class TestHorizontalRule:
 
 
 # ---------------------------------------------------------------------------
+# Index post-processing
+# ---------------------------------------------------------------------------
+
+class TestIndexPostProcessing:
+    def test_entries_become_separate_paragraphs(self):
+        # Two consecutive entries in the source markdown collapse into one
+        # flowing paragraph without post-processing.  After the pass, each
+        # entry sits on its own \par.
+        md = "INDEX\n\nAaron, 653, 656\nabolition, see antislavery\n"
+        result = body(md)
+        assert r"\noindent Aaron, 653, 656\par" in result
+        assert r"\noindent abolition, see antislavery\par" in result
+
+    def test_hangindent_used_for_continuation(self):
+        md = "INDEX\n\nAaron, 653, 656\n"
+        result = body(md)
+        assert r"\hangindent=1em" in result
+        assert r"\hangafter=1" in result
+
+    def test_explainer_paragraph_kept_as_prose(self):
+        # The leading explainer ("Page numbers in italics ...") has no page
+        # refs and shouldn't be wrapped as an entry.
+        md = (
+            "INDEX\n\n"
+            "Page numbers in italics refer to illustrations and tables.\n\n"
+            "Aaron, 653, 656\n"
+        )
+        result = body(md)
+        # The explainer line stays as plain prose.
+        assert "Page numbers in italics refer to illustrations and tables." in result
+        # The explainer is NOT wrapped in a hangindent paragraph.
+        assert (
+            r"\hangindent=1em\hangafter=1\noindent Page numbers" not in result
+        )
+        # The actual entry is.
+        assert r"\noindent Aaron, 653, 656\par" in result
+
+    def test_colon_terminated_entry_recognised(self):
+        # A main entry like "African Americans:" has no page refs but must
+        # still be split off so it doesn't merge into the next entry.
+        md = "INDEX\n\nAfrican Americans:\nin American Revolution, 78\n"
+        result = body(md)
+        assert r"\noindent African Americans:\par" in result
+        assert r"\noindent in American Revolution, 78\par" in result
+
+    def test_no_index_section_leaves_body_untouched(self):
+        # Without an "Index" heading the post-processor should be a no-op.
+        md = "Aaron, 653, 656\nabolition, 178--80\n"
+        result = body(md)
+        assert r"\hangindent" not in result
+        assert r"\begingroup" not in result
+
+    def test_section_after_index_closes_group(self):
+        # A new section heading after the index should end index mode and
+        # close the begingroup so subsequent content typesets normally.
+        md = (
+            "INDEX\n\n"
+            "Aaron, 653, 656\n"
+            "\n"
+            "# Next Chapter\n\n"
+            "Body text here.\n"
+        )
+        result = body(md)
+        # The endgroup must appear before the next \section.
+        endgroup_idx = result.index(r"\endgroup")
+        section_idx = result.index(r"\section{Next Chapter}")
+        assert endgroup_idx < section_idx
+
+
+# ---------------------------------------------------------------------------
 # Standalone document wrapper
 # ---------------------------------------------------------------------------
 
